@@ -1,0 +1,16 @@
+[
+{
+  "modid": "${mod_id}",
+  "name": "${mod_name}",
+  "description": "Modern quality of life, looks and frame rate for Minecraft 1.12.2 and its big modpacks. Works in single player and on any server, with or without the mod on the server; on a server it adds /locatebiome.",
+  "version": "${mod_version}",
+  "mcversion": "1.12.2",
+  "url": "https://jehlp.net/better-minecraft-1-12-2/",
+  "updateUrl": "",
+  "authorList": [],
+  "credits": "",
+  "logoFile": "",
+  "screenshots": [],
+  "dependencies": []
+}
+]

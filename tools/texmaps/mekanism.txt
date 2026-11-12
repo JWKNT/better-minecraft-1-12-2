@@ -1,0 +1,17 @@
+# Mekanism names that follow no pattern. old=new, "domain:path".
+mekanism:items/atomicalloy=mekanism:item/alloy_atomic
+mekanism:items/enrichedalloy=mekanism:item/alloy_infused
+mekanism:items/reinforcedalloy=mekanism:item/alloy_reinforced
+mekanism:items/compressedcarbon=mekanism:item/enriched_carbon
+mekanism:items/compresseddiamond=mekanism:item/enriched_diamond
+mekanism:items/compressedobsidian=mekanism:item/enriched_refined_obsidian
+mekanism:items/compressedredstone=mekanism:item/enriched_redstone
+mekanism:items/glowstoneingot=mekanism:item/ingot_refined_glowstone
+mekanism:items/obsidianingot=mekanism:item/ingot_refined_obsidian
+mekanism:items/glowstonenugget=mekanism:item/nugget_refined_glowstone
+mekanism:items/obsidiannugget=mekanism:item/nugget_refined_obsidian
+mekanism:items/refinedobsidiandust=mekanism:item/dust_refined_obsidian
+mekanism:items/plastick=mekanism:item/hdpe_stick
+mekanism:blocks/refinedglowstone=mekanism:block/block_refined_glowstone
+mekanism:blocks/refinedobsidian=mekanism:block/block_refined_obsidian
+mekanism:blocks/coalblock=mekanism:block/block_charcoal

@@ -1,0 +1,18 @@
+wait:20
+world:flat
+wait:40
+chat:/time set 6000
+chat:/gamerule doMobSpawning false
+chat:/gamerule doDaylightCycle false
+chat:/kill @e[type=!player]
+chat:/tp @p 0.5 4 0.5 -32 0
+chat:/fill 4 3 14 30 9 40 stone 0 hollow
+chat:/fill 5 4 15 29 8 39 chest
+wait:120
+shot:chest_room
+fps:6:chest_room_culling_on
+set:entityCulling=false
+wait:20
+fps:6:chest_room_culling_off
+set:entityCulling=true
+quit

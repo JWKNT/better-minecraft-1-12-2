@@ -1,0 +1,3 @@
+Jars the mod is compiled against but never ships or requires:
+
+  BetterQuesting-3.5.329.jar   copy from a pack's mods folder (MIT, github.com/Funwayguy/BetterQuesting)

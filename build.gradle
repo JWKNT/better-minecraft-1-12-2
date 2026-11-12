@@ -1,0 +1,62 @@
+plugins {
+    id 'java'
+    id 'com.gtnewhorizons.retrofuturagradle' version '2.0.3'
+}
+
+version = project.mod_version
+group = 'better112'
+
+base {
+    archivesName.set(project.mod_id)
+}
+
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(8))
+    }
+}
+
+minecraft {
+    mcVersion.set('1.12.2')
+    mcpMappingChannel.set('stable')
+    mcpMappingVersion.set('39')
+    username.set('Developer')
+    extraRunJvmArguments.addAll(['-Dfml.coreMods.load=better112.core.BetterCorePlugin'])
+}
+
+repositories {
+    maven {
+        name 'BlameJared'
+        url 'https://maven.blamejared.com'
+        content { includeGroup 'mezz.jei' }
+    }
+    // Mods that are only compiled against, taken from a pack's mods folder (see libs/README).
+    flatDir { dirs 'libs' }
+}
+
+dependencies {
+    // JEI is optional at runtime: everything that touches it lives in better112.jei
+    compileOnly rfg.deobf('mezz.jei:jei_1.12.2:4.16.1.302')
+    // Better Questing is optional at runtime too: everything that touches it lives in better112.quests
+    compileOnly rfg.deobf('local:BetterQuesting:3.5.329')
+}
+
+processResources {
+    inputs.property 'mod_version', project.mod_version
+    filesMatching('mcmod.info') { fcd ->
+        fcd.expand('mod_id': project.mod_id, 'mod_name': project.mod_name, 'mod_version': project.mod_version)
+    }
+}
+
+jar {
+    manifest {
+        attributes(
+            'FMLCorePlugin': 'better112.core.BetterCorePlugin',
+            'FMLCorePluginContainsFMLMod': 'true'
+        )
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}

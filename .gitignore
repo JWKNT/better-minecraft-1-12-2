@@ -1,0 +1,10 @@
+.gradle/
+build/
+run/
+*.iml
+.idea/
+# Third-party jars that are only compiled against (see libs/README)
+libs/*.jar
+*.log
+.DS_Store
+better112-autotest/

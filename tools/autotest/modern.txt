@@ -1,0 +1,63 @@
+wait:20
+world:flat
+wait:40
+chat:/time set 18000
+chat:/gamerule doDaylightCycle false
+chat:/gamerule doMobSpawning false
+chat:/kill @e[type=!player]
+chat:/fill -12 4 -4 40 30 60 air
+chat:/tp @p 0.5 4 0.5 0 10
+chat:/clear @p
+wait:20
+lightcheck:x:empty hand
+chat:/replaceitem entity @p slot.weapon.mainhand minecraft:torch
+wait:30
+lightcheck:x:holding a torch
+shot:dynlight_torch
+chat:/effect @p minecraft:regeneration 600 0
+chat:/effect @p minecraft:slowness 95 0
+chat:/give @p minecraft:diamond 3
+chat:/give @p minecraft:iron_ingot 12
+wait:15
+shot:hud_helpers
+chat:/effect @p clear
+fps:4:torch_standing
+walk:260
+wait:10
+fps:5:torch_walking_dynamic_lights_fast
+set:dynamicLights=2
+wait:10
+fps:5:torch_walking_dynamic_lights_fancy
+set:dynamicLights=0
+wait:10
+fps:5:torch_walking_dynamic_lights_off
+lightcheck:x:torch with dynamic lights off
+set:dynamicLights=1
+chat:/time set 6000
+chat:/tp @p 0.5 4 0.5 0 0
+chat:/fill 4 4 10 20 20 26 minecraft:leaves 4
+screen:quality
+opt:leaves_quality=1
+apply
+wait:100
+close
+look:-45:-10
+wait:40
+fps:5:leaves_fancy
+shot:leaves_fancy
+screen:quality
+opt:leaves_quality=3
+apply
+wait:100
+close
+wait:40
+fps:5:leaves_smart
+shot:leaves_smart
+screen:quality
+opt:leaves_quality=0
+apply
+screen:accessibility
+hover:0
+shot:menu_accessibility
+close
+quit

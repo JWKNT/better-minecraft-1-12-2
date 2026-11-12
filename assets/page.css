@@ -1,0 +1,20 @@
+/* Better 1.12.2: the introduction, the feature list beside it and the picture gallery. The shared theme supplies the rest. */
+main.page { width: var(--site-frame-width); margin-inline: auto; padding-top: 2rem; }
+.intro { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 3rem; align-items: start; }
+.intro > .prose > p:first-child { margin-top: 0; }
+.features { margin: 0; padding-left: 1.2rem; }
+.features li { margin: 0 0 .75rem; }
+.features strong { font-family: var(--display); font-weight: 700; }
+.gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.75rem 1.5rem; margin-block: var(--section-space); padding-top: var(--section-space); border-top: 1px solid var(--line); }
+.gallery figure { margin: 0; }
+.gallery .wide { grid-column: 1 / -1; }
+.gallery img { display: block; width: 100%; height: auto; border: 1px solid var(--line); }
+.site-footer { width: var(--site-frame-width); }
+.gallery figcaption { margin-top: .45rem; color: var(--muted); font: var(--text-meta)/1.45 var(--ui, var(--serif)); }
+@media (max-width: 60rem) {
+  .intro { grid-template-columns: minmax(0, 1fr); }
+  .features { margin-top: .4rem; }
+}
+@media (max-width: 42rem) {
+  .gallery { grid-template-columns: minmax(0, 1fr); }
+}
