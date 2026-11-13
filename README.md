@@ -22,12 +22,28 @@ folder next to `mods` and put in it the two modern jars the players' games read:
   for that version, under any name that ends in `.jar`), and
 - `BiomesOPlenty-forge-1.20.1-19.0.0.96.jar` (Biomes O' Plenty for 1.20.1).
 
-Set `level-type=better112modern` in `server.properties` before the world is first made. The
-server's log and each game's log have a line "Modern content: ..., signature ...", and the
-signatures must be the same, or Forge refuses the player because blocks are missing on one
-side. A game reads the newest modern Minecraft it finds in the launchers on the computer; to
-hold every player to one version, put that same client jar in the game's own
-`better112/modern_mods` folder, which comes first.
+Set `level-type=better112modern` in `server.properties` before the world is first made.
+
+**Joining a server.** Each player needs the mod and the same two jars as the server, in a
+`better112/modern_mods` folder in the game folder, next to `mods`:
+
+1. Put the same Minecraft client jar as the server in `better112/modern_mods` (tested:
+   [Minecraft 1.21.10 client jar](https://piston-data.mojang.com/v1/objects/d3bdf582a7fa723ce199f3665588dcfe6bf9aca8/client.jar),
+   any file name that ends in `.jar`).
+2. Put the same Biomes O' Plenty jar there (tested:
+   [BiomesOPlenty-forge-1.20.1-19.0.0.96.jar](https://cdn.modrinth.com/data/HXF82T3G/versions/jxUqRzSD/BiomesOPlenty-forge-1.20.1-19.0.0.96.jar)).
+3. If the game used the mod with a different Minecraft version before, delete
+   `better112/modern_worldgen.zip`. The game makes it again from the new jar.
+4. Start the game and join from Multiplayer on the title screen. In Divine Journey 2, a
+   launcher that joins the server as the game starts leaves "Logging in..." on the screen,
+   because Universal Tweaks fails until the title screen has opened once.
+
+Without its own Minecraft jar, a game reads the newest modern Minecraft in the launchers on
+the computer, which may not be the server's version. Copying another player's `better112`
+folder is not enough when that player's game reads Minecraft from a launcher. To check, compare
+the line "Modern content: ..., signature ..." in the game's `logs/latest.log` with the same
+line in the server's log. The signatures must be the same, or Forge refuses the player because
+blocks are missing on one side.
 
 ## What it does
 

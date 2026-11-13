@@ -6,7 +6,7 @@
 <link rel="icon" href="assets/favicon.png" type="image/png">
 <script src="https://jehlp.net/site-theme/v2/theme.js?v=20261009-reading-folio"></script>
 <link rel="stylesheet" href="https://jehlp.net/site-theme/v2/base.css?v=20261108-justify">
-<link rel="stylesheet" href="assets/page.css?v=20261112">
+<link rel="stylesheet" href="assets/page.css?v=20261112b">
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to the page</a>
@@ -29,7 +29,16 @@
 
 <p>Download <a href="https://github.com/JWKNT/better-minecraft-1-12-2/releases/latest/download/better112-0.1.1.jar">better112-0.1.1.jar</a> and put it in the <code>mods</code> folder of the game. The mod needs Forge 14.23.5.2860 or later. The Video Settings screen shows the settings for each feature.</p>
 
-<p>The mod works in single player and on servers. A player with the mod can join any server. A server with the mod has the new blocks, the new biomes, Modern Terrain and the <code>/locatebiome</code> command, and all players on it must have the same version of the mod. The server needs the two modern jars that the games read, in a <code>better112/modern_mods</code> folder: the Minecraft client jar and the Biomes O’ Plenty jar. The <a href="https://github.com/JWKNT/better-minecraft-1-12-2#readme">documentation</a> gives the steps.</p>
+<p>The mod works in single player and on servers. A player with the mod can join any server. A server with the mod has the new blocks, the new biomes, Modern Terrain and the <code>/locatebiome</code> command. Each player on that server must have the same version of the mod and the same two modern jars as the server. The <a href="https://github.com/JWKNT/better-minecraft-1-12-2#readme">documentation</a> gives the steps for a server.</p>
+
+<p>To join a server with the mod, install the mod. Then do these steps:</p>
+<ol class="steps">
+<li>Make a <code>better112/modern_mods</code> folder in the game folder, next to the <code>mods</code> folder.</li>
+<li>Put the same Minecraft client jar as the server in this folder. The tested version is the <a href="https://piston-data.mojang.com/v1/objects/d3bdf582a7fa723ce199f3665588dcfe6bf9aca8/client.jar">Minecraft 1.21.10 client jar</a>.</li>
+<li>Put the same Biomes O’ Plenty jar as the server in this folder. The tested version is <a href="https://cdn.modrinth.com/data/HXF82T3G/versions/jxUqRzSD/BiomesOPlenty-forge-1.20.1-19.0.0.96.jar">BiomesOPlenty-forge-1.20.1-19.0.0.96.jar</a>.</li>
+<li>If the game used the mod with a different Minecraft version before, delete <code>better112/modern_worldgen.zip</code>.</li>
+<li>Start the game. Join the server from Multiplayer on the title screen.</li>
+</ol>
 
 <p>The jar contains no textures or data from Mojang or from other mods. The mod reads modern textures, blocks and terrain data from files that are already on the computer. These files are modern versions of Minecraft or of the mods, for example in another launcher instance. The mod converts them when the game starts.</p>
 
