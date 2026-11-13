@@ -4,7 +4,7 @@ One Forge mod that brings modern Minecraft's quality of life, looks and frame ra
 1.12.2, the version the big expert packs still live on. Built around Divine Journey 2, but it
 depends on no other mod: every integration switches itself off when its partner is missing.
 
-Download `better112-0.1.2.jar` from the
+Download `better112-0.1.3.jar` from the
 [releases](https://github.com/JWKNT/better-minecraft-1-12-2/releases) and put it in the game's
 `mods` folder.
 

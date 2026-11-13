@@ -33,7 +33,7 @@ public class Better112 {
 
     public static final String MODID = "better112";
     public static final String NAME = "Better 1.12.2";
-    public static final String VERSION = "0.1.2";
+    public static final String VERSION = "0.1.3";
     public static final Logger LOG = LogManager.getLogger("Better112");
 
     /**

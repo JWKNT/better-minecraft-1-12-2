@@ -269,8 +269,11 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
         PATCHES.put("net.minecraft.client.Minecraft", new ClassPatch() {
             @Override
             public boolean apply(ClassNode c) {
-                // ...and it is finished once the last things mods draw at the end of a frame are done.
-                return callAround("gui_scale_end", find(c, "()V", "runGameLoop", "func_71411_J"), false, "guiPassEnd",
+                // ...and it is finished before the end-of-frame event, so every listener of that event sees
+                // the window's real size. Tips re-hooks the loading screen whenever the size it sees changes
+                // (one more framebuffer each time); seeing the doubled size there made that happen twice a
+                // frame, and the chain overflowed the stack on the next loading screen (leaving a server).
+                return callAround("gui_scale_end", find(c, "()V", "runGameLoop", "func_71411_J"), true, "guiPassEnd",
                         "net/minecraftforge/fml/common/FMLCommonHandler", "onRenderTickEnd");
             }
         });
