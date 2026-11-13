@@ -103,6 +103,39 @@ public class GuiFtbQuests extends GuiScreenCanvas implements INeedsRefresh {
         return view != null && view.selectIndex(index);
     }
 
+    /**
+     * press / release: the mouse button over the first open quest, as the game hands the events over;
+     * with frames drawn in between while the real button is up, as after a quick click. escape: the key.
+     */
+    String testOp(String op) {
+        try {
+            int[] at = view == null ? null : view.testFirstNodeCenter();
+            if (op.equals("press") || op.equals("release")) {
+                if (at == null) {
+                    return "no quest on the map";
+                }
+                // Better Questing reads the mouse events itself and hands them to these.
+                if (op.equals("press")) {
+                    onMouseClick(at[0], at[1], 0);
+                    return "pressed at " + at[0] + ", " + at[1];
+                }
+                onMouseRelease(at[0], at[1], 0);
+                return "released: " + (window != null ? "the quest window opened" : "no quest window");
+            }
+            if (op.equals("escape")) {
+                keyTyped((char) 0, Keyboard.KEY_ESCAPE);
+                return "Escape: now " + QuestsBridge.describe(mc.currentScreen);
+            }
+            if (op.equals("close")) {
+                closeQuest();
+                return "window closed";
+            }
+        } catch (Throwable t) {
+            return op + " failed: " + t;
+        }
+        return "unknown " + op;
+    }
+
     void testExpandSidebar(boolean open) {
         if (view != null) {
             view.forceBarOpen = open;

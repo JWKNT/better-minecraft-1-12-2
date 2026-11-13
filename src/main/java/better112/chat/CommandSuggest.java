@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import better112.Better112;
 import better112.config.BetterConfig;
@@ -18,7 +19,10 @@ import net.minecraft.client.gui.GuiChat;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.GuiTextField;
 import net.minecraft.network.play.client.CPacketTabComplete;
+import net.minecraft.network.play.server.SPacketChat;
 import net.minecraft.network.play.server.SPacketTabComplete;
+import net.minecraft.util.text.ChatType;
+import net.minecraft.util.text.TextComponentString;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.RayTraceResult;
 import net.minecraft.util.text.TextFormatting;
@@ -47,6 +51,30 @@ public final class CommandSuggest {
     private static int selected;
     private static int top;
     private static String hiddenFor;
+    /** Questions sent and not yet answered, and when the last one went. */
+    private static final AtomicInteger waiting = new AtomicInteger();
+    private static volatile long askedAt;
+    /** Lines kept out of the chat, for the self-test. */
+    public static volatile int hiddenLines;
+
+    /**
+     * Whether a chat line is a side effect of asking for suggestions. To list who may use a command,
+     * the server runs each command's permission check, and some mods' checks write to the player
+     * (Tool Progression's /tpr: "this command can only be used in single player mode"). Vanilla asks
+     * only on Tab; asked on every key, such a line would fill the chat. The server answers a question
+     * after everything it sends while working it out, so a plain system line that comes while a
+     * question is open is taken for one of these. Player chat and translated game messages (joins,
+     * deaths, announcements) always pass.
+     */
+    private static boolean provoked(SPacketChat packet) {
+        if (waiting.get() <= 0 || System.currentTimeMillis() - askedAt > 3000L || packet.getType() != ChatType.SYSTEM
+                || !(packet.getChatComponent() instanceof TextComponentString)) {
+            return false;
+        }
+        hiddenLines++;
+        Better112.LOG.debug("Kept out of the chat while asking for command suggestions: {}", packet.getChatComponent().getUnformattedText());
+        return true;
+    }
 
     @SubscribeEvent
     public void onConnect(FMLNetworkEvent.ClientConnectedToServerEvent event) {
@@ -55,12 +83,16 @@ public final class CommandSuggest {
             if (pipeline.get("better112_suggest") != null || pipeline.get("packet_handler") == null) {
                 return;
             }
+            waiting.set(0);
             pipeline.addBefore("packet_handler", "better112_suggest", new ChannelInboundHandlerAdapter() {
                 @Override
                 public void channelRead(ChannelHandlerContext context, Object message) throws Exception {
                     if (message instanceof SPacketTabComplete) {
+                        waiting.updateAndGet(n -> Math.max(0, n - 1));
                         final String[] matches = ((SPacketTabComplete) message).getMatches().clone();
                         Minecraft.getMinecraft().addScheduledTask(() -> answered(matches));
+                    } else if (message instanceof SPacketChat && provoked((SPacketChat) message)) {
+                        return;
                     }
                     super.channelRead(context, message);
                 }
@@ -119,6 +151,8 @@ public final class CommandSuggest {
         RayTraceResult hit = mc.objectMouseOver;
         BlockPos target = hit != null && hit.typeOfHit == RayTraceResult.Type.BLOCK ? hit.getBlockPos() : null;
         // The last flag is for command blocks: with it the server leaves the slash off command names.
+        askedAt = System.currentTimeMillis();
+        waiting.incrementAndGet();
         mc.player.connection.sendPacket(new CPacketTabComplete(typed, target, false));
     }
 
@@ -256,6 +290,7 @@ public final class CommandSuggest {
         }
         String after = input.getText();
         input.setText(before);
-        return list.size() + " for '" + before + "' " + (list.size() > 6 ? list.subList(0, 6) + "..." : list) + ", Tab gives '" + after + "'";
+        return list.size() + " for '" + before + "' " + (list.size() > 6 ? list.subList(0, 6) + "..." : list) + ", Tab gives '" + after + "'"
+                + ", side-effect lines kept out of the chat so far: " + hiddenLines;
     }
 }

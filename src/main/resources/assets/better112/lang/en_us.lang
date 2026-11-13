@@ -237,7 +237,7 @@ better112.quests.none_here=none
 better112.quests.submit=Submit
 better112.quests.claim=Claim
 better112.option.ftb_quests=FTB-Style Quest Book
-better112.option.ftb_quests.tooltip=Shows Better Questing's quests the way FTB Quests does: chapters down the left, round quest nodes on a canvas you drag and zoom, and quests opening as a window. The quests, progress and rewards are unchanged. The Classic button in the book opens the original screens.
+better112.option.ftb_quests.tooltip=Shows Better Questing's quests the way FTB Quests does: chapters down the left, round quest nodes on a canvas you drag and zoom, and quests opening as a window. The quests, progress and rewards are unchanged. The book still opens on Better Questing's home screen, with Party and Theme. The Classic button in the book opens the original quest lines.
 better112.unavailable.no_quests=Needs Better Questing.
 
 better112.page.accessibility=Accessibility

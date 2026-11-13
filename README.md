@@ -4,7 +4,7 @@ One Forge mod that brings modern Minecraft's quality of life, looks and frame ra
 1.12.2, the version the big expert packs still live on. Built around Divine Journey 2, but it
 depends on no other mod: every integration switches itself off when its partner is missing.
 
-Download `better112-0.1.1.jar` from the
+Download `better112-0.1.2.jar` from the
 [releases](https://github.com/JWKNT/better-minecraft-1-12-2/releases) and put it in the game's
 `mods` folder.
 
@@ -116,7 +116,10 @@ it).
   does. The Extended Life fork already does this, so there the mod stays quiet.
 - Command suggestions, as since 1.13: while a command is typed, the commands or arguments
   that fit are listed above the chat line, with the rest of the picked one greyed in after
-  the cursor. Up and Down pick, Tab takes it, Escape puts the list away.
+  the cursor. Up and Down pick, Tab takes it, Escape puts the list away. On a server, some
+  mods' commands answer every such question with a chat line (Tool Progression's `/tpr`:
+  "this command can only be used in single player mode"); lines that arrive while a question
+  is open are kept out of the chat.
 - The newer F3 keys: F3+F4 opens the game mode picker (tap F4 to step through the modes,
   let go of F3 to switch), F3+C copies where you stand as a `/tp` command, F3+I copies the
   block or entity you look at as a `/setblock` or `/summon` command.
@@ -230,12 +233,14 @@ held; the same keys over the recipe take the bookmark away again. JEI Utilities 
 does this (bookmark an item from inside a recipe and it remembers the recipe), so where
 that mod is installed, as in Divine Journey 2, this part stays off.
 
-**Quest book.** With Better Questing installed, its quest book opens in the layout FTB
-Quests uses: chapters down the left edge (hover to see names and progress), the chapter's
+**Quest book.** With Better Questing installed, the quest book still opens on Better
+Questing's home screen, with its Party and Theme buttons. Its Quests button opens the layout
+FTB Quests uses, and Escape goes back to the home screen: chapters down the left edge (hover to see names and progress), the chapter's
 quests as round nodes on a canvas you drag and zoom, lines for prerequisites, and a quest
 opening as a window with tasks, rewards and description. Quests, progress, task widgets and
-everything sent to the server are Better Questing's own. The Classic button opens the
-original screens, and edit mode always uses them. Each chapter remembers which part of its
+everything sent to the server are Better Questing's own. A click opens a quest anywhere in
+its circle or the light ring around it. The Classic button opens the original quest lines,
+and edit mode always uses them. Each chapter remembers which part of its
 map you were looking at and how large, also across a window resize; the map cannot be
 dragged out of sight; the chapter bar opens once the mouse rests on it and shows where
 you are in a long list; a locked quest's state says what has to be finished first.

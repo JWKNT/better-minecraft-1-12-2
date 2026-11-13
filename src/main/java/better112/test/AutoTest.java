@@ -312,8 +312,19 @@ public final class AutoTest {
                     } else if (arg.equals("chapter")) {
                         report.add("select chapter: " + better112.quests.QuestsBridge.testSelectChapter(mc.currentScreen,
                                 Integer.parseInt(p.length > 2 ? p[2] : "0")));
+                    } else {
+                        // questop:press | questop:release | questop:escape | questop:close
+                        report.add("quests " + arg + ": " + better112.quests.QuestsBridge.testOp(mc.currentScreen, arg));
                     }
                 }
+                // After a press, the release comes two ticks later, as in a quick click: frames are drawn
+                // in between with the real button up.
+                waitTicks = arg.equals("press") ? 1 : 10;
+                break;
+            case "questbook":
+                // questbook:key - what the quest key opens; questbook:lines - the home screen's Quests button
+                report.add("quest book " + arg + ": " + (ClientTweaks.QUESTS_LOADED
+                        ? better112.quests.QuestsBridge.testOpen(arg) : "Better Questing is not installed"));
                 waitTicks = 10;
                 break;
             case "opt": {

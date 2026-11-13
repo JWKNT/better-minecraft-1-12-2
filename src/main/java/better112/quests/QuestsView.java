@@ -89,9 +89,13 @@ final class QuestsView implements IGuiPanel {
     private final Map<Integer, Node> byId = new HashMap<Integer, Node>();
     private final List<Node[]> links = new ArrayList<Node[]>();
 
+    /** How far the mouse may move between press and release for a click (not a drag) on a quest. */
+    private static final int DRAG = 5;
+
     private float panX, panY, zoom = 1.0F;
     private boolean pressed, moved;
     private int pressX, pressY, lastX, lastY;
+    private long upSince;
     private Node pressedNode;
     private int barScroll;
     boolean forceBarOpen;
@@ -260,6 +264,19 @@ final class QuestsView implements IGuiPanel {
         return false;
     }
 
+    /** Self-test: where on the screen the first open quest's circle is, or null. */
+    int[] testFirstNodeCenter() {
+        for (Node node : nodes) {
+            if (node.state != EnumQuestState.LOCKED) {
+                int x = Math.round(panX + (node.x + node.w / 2.0F) * zoom), y = Math.round(panY + (node.y + node.h / 2.0F) * zoom);
+                if (x >= barWidthNow && x < width() && y >= HEADER && y < height()) {
+                    return new int[] {x, y};
+                }
+            }
+        }
+        return null;
+    }
+
     int firstQuestId() {
         for (Node node : nodes) {
             if (node.state != EnumQuestState.LOCKED) {
@@ -397,12 +414,13 @@ final class QuestsView implements IGuiPanel {
         hovered = null;
         hoveredTip = null;
 
-        // Dragging pans the canvas.
+        // Dragging pans the canvas. The game reads clicks only once a tick but draws many frames
+        // in between, so a frame can see the button up before the release has been handled: only
+        // the release itself ends a press, or a press whose release never came (let go outside the window).
         if (pressed) {
-            if (!Mouse.isButtonDown(0)) {
-                pressed = false;
-            } else {
-                if (Math.abs(mx - pressX) > 3 || Math.abs(my - pressY) > 3) {
+            if (Mouse.isButtonDown(0)) {
+                upSince = 0L;
+                if (Math.abs(mx - pressX) > DRAG || Math.abs(my - pressY) > DRAG) {
                     moved = true;
                 }
                 if (moved) {
@@ -412,6 +430,11 @@ final class QuestsView implements IGuiPanel {
                 }
                 lastX = mx;
                 lastY = my;
+            } else if (upSince == 0L) {
+                upSince = now;
+            } else if (now - upSince > 250L) {
+                pressed = false;
+                pressedNode = null;
             }
         }
 
@@ -423,15 +446,15 @@ final class QuestsView implements IGuiPanel {
         GlStateManager.pushMatrix();
         GlStateManager.translate(panX, panY, 0.0F);
         GlStateManager.scale(zoom, zoom, 1.0F);
-        float wx = (mx - panX) / zoom, wy = (my - panY) / zoom;
         for (Node[] link : links) {
             Node from = link[0], to = link[1];
             int color = to.state == EnumQuestState.LOCKED ? 0xFF34343E : to.state == EnumQuestState.UNLOCKED ? OPEN : DONE;
             Draw.line(from.x + from.w / 2.0F, from.y + from.h / 2.0F, to.x + to.w / 2.0F, to.y + to.h / 2.0F,
                     to.main ? 3.0F : 2.0F, color);
         }
+        Node under = overCanvas ? nodeAt(mx, my) : null;
         for (Node node : nodes) {
-            boolean hover = overCanvas && wx >= node.x && wx < node.x + node.w && wy >= node.y && wy < node.y + node.h;
+            boolean hover = node == under;
             if (hover) {
                 hovered = node;
             }
@@ -606,21 +629,16 @@ final class QuestsView implements IGuiPanel {
                 click();
             } else if (which == 2) {
                 click();
-                QuestsBridge.openClassic(null);
+                QuestsBridge.openClassic(screen.parent);
             }
             return true;
         }
         pressed = true;
         moved = false;
+        upSince = 0L;
         pressX = lastX = mx;
         pressY = lastY = my;
-        float wx = (mx - panX) / zoom, wy = (my - panY) / zoom;
-        pressedNode = null;
-        for (Node node : nodes) {
-            if (wx >= node.x && wx < node.x + node.w && wy >= node.y && wy < node.y + node.h) {
-                pressedNode = node;
-            }
-        }
+        pressedNode = nodeAt(mx, my);
         return true;
     }
 
@@ -631,12 +649,36 @@ final class QuestsView implements IGuiPanel {
         }
         pressed = false;
         saveView();
+        if (Math.abs(mx - pressX) > DRAG || Math.abs(my - pressY) > DRAG) {
+            moved = true;
+        }
         if (!moved && pressedNode != null) {
             click();
             screen.openQuest(pressedNode.id);
         }
         pressedNode = null;
         return true;
+    }
+
+    /**
+     * The quest under the point: inside its circle or the light ring drawn round it on hover, the
+     * nearest one where circles crowd together. The square corners outside a circle do not count, so
+     * they cannot take a click meant for a neighbour.
+     */
+    private Node nodeAt(int mx, int my) {
+        float wx = (mx - panX) / zoom, wy = (my - panY) / zoom;
+        Node best = null;
+        float bestDistance = Float.MAX_VALUE;
+        for (Node node : nodes) {
+            float cx = node.x + node.w / 2.0F, cy = node.y + node.h / 2.0F;
+            float reach = Math.min(node.w, node.h) / 2.0F + 2.5F;
+            float distance = (wx - cx) * (wx - cx) + (wy - cy) * (wy - cy);
+            if (distance <= reach * reach && distance < bestDistance) {
+                best = node;
+                bestDistance = distance;
+            }
+        }
+        return best;
     }
 
     @Override
