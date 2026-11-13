@@ -91,8 +91,12 @@ final class CaveDecor {
     }
 
     static void decorate(World world, final ModernTerrain terrain, int chunkX, int chunkZ) {
+        // Lush caves, dripstone, geodes and sea plants are made of imported blocks, which a server without the jars does not have.
+        if (!better112.world.feature.Imported.present() || !better112.config.BetterConfig.importModernVanilla) {
+            return;
+        }
         Features reader = ImportedBiomes.features();
-        if (reader == null || !better112.config.BetterConfig.importModernVanilla) {
+        if (reader == null) {
             return;
         }
         long start = System.nanoTime();

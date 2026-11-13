@@ -11,7 +11,6 @@ import java.util.Set;
 import java.util.TreeSet;
 
 import better112.Better112;
-import better112.content.ModernContent;
 import better112.world.density.WorldData;
 
 import com.google.gson.JsonArray;
@@ -634,7 +633,7 @@ public final class Features {
     /** Whether a plant (or other block that needs footing) could stand at a spot. */
     static boolean canStay(World world, BlockPos pos, IBlockState state) {
         Block block = state.getBlock();
-        if (block == Blocks.DOUBLE_PLANT || ModernContent.isTallPlant(block)) {
+        if (block == Blocks.DOUBLE_PLANT || Imported.isTallPlant(block)) {
             // A two-block plant is judged before it is there: room for both halves and footing for the lower.
             return world.isAirBlock(pos) && block.canPlaceBlockAt(world, pos);
         }
@@ -1276,7 +1275,7 @@ public final class Features {
                         }
                         BlockPos at = new BlockPos(column.getX(), surface(world, column, OCEAN_FLOOR), column.getZ());
                         boolean high = tall != null && random.nextDouble() < tallChance;
-                        return ModernContent.placeAquatic(world, at, high ? tall : low, FLAGS) || (high && ModernContent.placeAquatic(world, at, low, FLAGS));
+                        return Imported.placeAquatic(world, at, high ? tall : low, FLAGS) || (high && Imported.placeAquatic(world, at, low, FLAGS));
                     }
                 };
             }
@@ -1292,7 +1291,7 @@ public final class Features {
                         BlockPos at = new BlockPos(pos.getX(), surface(world, pos, OCEAN_FLOOR), pos.getZ());
                         int height = 1 + random.nextInt(10), placed = 0;
                         // A stalk of so many pieces with the growing tip on top; it stops two blocks short of the surface at the latest.
-                        while (placed <= height && at.getY() < 254 && ModernContent.placeAquatic(world, at, stalk, FLAGS)) {
+                        while (placed <= height && at.getY() < 254 && Imported.placeAquatic(world, at, stalk, FLAGS)) {
                             placed++;
                             at = at.up();
                         }
@@ -1318,7 +1317,7 @@ public final class Features {
                             BlockPos column = pos.add(clamp(random.nextInt(8) - random.nextInt(8)), 0, clamp(random.nextInt(8) - random.nextInt(8)));
                             if (world.isBlockLoaded(column)) {
                                 BlockPos at = new BlockPos(column.getX(), surface(world, column, OCEAN_FLOOR), column.getZ());
-                                any |= ModernContent.placeAquatic(world, at, States.with(pickle, "pickles", String.valueOf(random.nextInt(4) + 1)), FLAGS);
+                                any |= Imported.placeAquatic(world, at, States.with(pickle, "pickles", String.valueOf(random.nextInt(4) + 1)), FLAGS);
                             }
                         }
                         return any;
@@ -1441,7 +1440,7 @@ public final class Features {
                 };
             }
             default:
-                if (fullType.startsWith(ModernContent.modNamespace() + ":") && Decor.knows(type.substring(type.indexOf(':') + 1))) {
+                if (fullType.startsWith(Imported.MOD_NAMESPACE + ":") && Decor.knows(type.substring(type.indexOf(':') + 1))) {
                     final String kind = type.substring(type.indexOf(':') + 1);
                     return new Thing() {
                         @Override
@@ -1450,7 +1449,7 @@ public final class Features {
                         }
                     };
                 }
-                if (fullType.startsWith(ModernContent.modNamespace() + ":") && type.endsWith("_tree")) {
+                if (fullType.startsWith(Imported.MOD_NAMESPACE + ":") && type.endsWith("_tree")) {
                     final String kind = type.substring(type.indexOf(':') + 1);
                     final Trees.Shape shape = new Trees.Shape(config);
                     return new Thing() {
@@ -1496,18 +1495,18 @@ public final class Features {
                 return false;
             }
             IBlockState there = world.getBlockState(pos);
-            if ((there.getBlock() != Blocks.WATER && !ModernContent.isAquatic(there.getBlock())) || !sea(world, pos.up())) {
+            if ((there.getBlock() != Blocks.WATER && !Imported.isAquatic(there.getBlock())) || !sea(world, pos.up())) {
                 return false;
             }
             world.setBlockState(pos, coral, FLAGS);
             if (random.nextFloat() < 0.25F && !plants.isEmpty()) {
-                ModernContent.placeAquatic(world, pos.up(), plants.get(random.nextInt(plants.size())), FLAGS);
+                Imported.placeAquatic(world, pos.up(), plants.get(random.nextInt(plants.size())), FLAGS);
             } else if (random.nextFloat() < 0.05F && pickle != null) {
-                ModernContent.placeAquatic(world, pos.up(), States.with(pickle, "pickles", String.valueOf(random.nextInt(4) + 1)), FLAGS);
+                Imported.placeAquatic(world, pos.up(), States.with(pickle, "pickles", String.valueOf(random.nextInt(4) + 1)), FLAGS);
             }
             for (EnumFacing side : EnumFacing.HORIZONTALS) {
                 if (random.nextFloat() < 0.2F && !wallFans.isEmpty() && sea(world, pos.offset(side))) {
-                    ModernContent.placeAquatic(world, pos.offset(side),
+                    Imported.placeAquatic(world, pos.offset(side),
                             States.with(wallFans.get(random.nextInt(wallFans.size())), "facing", side.getName()), FLAGS);
                 }
             }
@@ -1833,11 +1832,11 @@ public final class Features {
             }
             return false;
         }
-        if (ModernContent.isTallPlant(block)) {
-            return ModernContent.placeTall(world, pos, block, FLAGS);
+        if (Imported.isTallPlant(block)) {
+            return Imported.placeTall(world, pos, block, FLAGS);
         }
-        if (ModernContent.isAquatic(block)) {
-            return ModernContent.placeAquatic(world, pos, state, FLAGS);
+        if (Imported.isAquatic(block)) {
+            return Imported.placeAquatic(world, pos, state, FLAGS);
         }
         if (block instanceof BlockBush || block == Blocks.REEDS || block == Blocks.CACTUS) {
             if (world.isAirBlock(pos) && canStay(world, pos, state)) {

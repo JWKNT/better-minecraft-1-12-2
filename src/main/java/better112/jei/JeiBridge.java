@@ -20,6 +20,23 @@ public final class JeiBridge {
         return JeiTooltips.acceptedOres();
     }
 
+    /** Self-test: every item JEI shows in its list now (hidden items left out), or an empty list. */
+    public static java.util.List<net.minecraft.item.ItemStack> shownItems() {
+        java.util.List<net.minecraft.item.ItemStack> out = new java.util.ArrayList<net.minecraft.item.ItemStack>();
+        if (BetterJeiPlugin.runtime != null) {
+            mezz.jei.api.IIngredientFilter filter = BetterJeiPlugin.runtime.getIngredientFilter();
+            String typed = filter.getFilterText();
+            filter.setFilterText("");
+            for (Object each : filter.getFilteredIngredients()) {
+                if (each instanceof net.minecraft.item.ItemStack) {
+                    out.add((net.minecraft.item.ItemStack) each);
+                }
+            }
+            filter.setFilterText(typed);
+        }
+        return out;
+    }
+
     /** Recipe bookmarks listen for their key and draw their preview through this. */
     public static Object recipeMarkEvents() {
         return new RecipeMarks.Events();

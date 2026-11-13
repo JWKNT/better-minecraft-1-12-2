@@ -14,11 +14,11 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
 import better112.Better112;
-import better112.textures.ModernTextures;
 import better112.world.ModernTerrain;
 import better112.world.density.WorldData;
 
 import net.minecraft.world.World;
+import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.Loader;
 
 /**
@@ -65,7 +65,9 @@ public final class ModernWorld {
         try {
             File cache = cache();
             if (cache == null) {
-                Better112.LOG.info("Modern Terrain world type not offered: no Minecraft 1.19 or newer found on this computer.");
+                Better112.LOG.info(FMLCommonHandler.instance().getSide().isServer()
+                        ? "Modern Terrain world type not available: put the Minecraft client jar the players' games read in better112/modern_mods."
+                        : "Modern Terrain world type not offered: no Minecraft 1.19 or newer found on this computer.");
                 return;
             }
             WorldData found = new WorldData(Collections.singletonList(cache));
@@ -124,7 +126,8 @@ public final class ModernWorld {
 
     /** The newest installed Minecraft whose jar has data-driven terrain (1.19+). */
     private static File findJar() {
-        List<File> jars = ModernTextures.modernGameJars(Loader.instance().getConfigDir().getParentFile());
+        // In the game: the launchers on this computer. On a server: a Minecraft client jar in better112/modern_mods.
+        List<File> jars = better112.content.GameJars.games(Loader.instance().getConfigDir().getParentFile());
         for (File jar : jars) {
             try (ZipFile zip = new ZipFile(jar)) {
                 if (zip.getEntry(PROBE) != null) {

@@ -17,7 +17,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 import better112.Better112;
-import better112.content.ModernContent;
+import better112.world.feature.Imported;
 import better112.world.feature.Features;
 import better112.world.feature.States;
 
@@ -269,7 +269,7 @@ public final class ImportedBiomes {
         if (!featuresTried) {
             featuresTried = true;
             try {
-                File jar = ModernContent.sourceJar();
+                File jar = Imported.sourceJar();
                 better112.world.density.WorldData data = ModernWorld.dataWith(jar);
                 if (data != null) {
                     features = new Features(data);
@@ -363,7 +363,7 @@ public final class ImportedBiomes {
             text.append(vanillaCount).append(" modern Minecraft biomes");
         }
         if (modCount > 0) {
-            text.append(text.length() == 0 ? "" : ", ").append(modCount).append(" biomes from ").append(ModernContent.sourceJar().getName());
+            text.append(text.length() == 0 ? "" : ", ").append(modCount).append(" biomes from ").append(Imported.sourceJar().getName());
         }
         if (skipped[0] > 0) {
             text.append(" (").append(skipped[0]).append(" left out: this pack has almost used up the 256 biome ids 1.12.2 allows)");
@@ -413,7 +413,7 @@ public final class ImportedBiomes {
 
     /** The overworld biomes of Biomes O' Plenty, from its jar. */
     private static void registerMod(RegistryEvent.Register<Biome> event, int[] skipped) throws java.io.IOException {
-        File jar = ModernContent.sourceJar();
+        File jar = Imported.sourceJar();
         if (jar == null) {
             return;
         }

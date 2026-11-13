@@ -3,7 +3,6 @@ package better112.world.feature;
 import java.util.HashMap;
 import java.util.Map;
 
-import better112.content.ModernContent;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -113,7 +112,7 @@ public final class States {
         int colon = id.indexOf(':');
         String namespace = colon < 0 ? "minecraft" : id.substring(0, colon), name = colon < 0 ? id : id.substring(colon + 1);
         // A block brought over from the modern game or a modern mod: itself, not a look-alike.
-        Block imported = ModernContent.block(id);
+        Block imported = Imported.block(id);
         if (imported != null || !namespace.equals("minecraft")) {
             return imported == null ? null : withProperties(imported.getDefaultState(), properties);
         }

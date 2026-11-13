@@ -12,6 +12,8 @@ import net.minecraft.block.BlockButton;
 import net.minecraft.block.properties.IProperty;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.resources.FileResourcePack;
+import net.minecraft.client.resources.IResourcePack;
 import net.minecraft.client.renderer.block.model.IBakedModel;
 import net.minecraft.client.renderer.block.model.ModelResourceLocation;
 import net.minecraft.client.renderer.block.statemap.StateMapperBase;
@@ -31,6 +33,21 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 
 /** The look of imported blocks: which model each state uses, item models, and biome tints. */
 public final class ContentClient {
+
+    /** Adds the resource pack with the looks of the imported blocks, before the game reads its packs. */
+    public static void addPack(java.io.File zip) {
+        if (zip == null) {
+            return;
+        }
+        List<IResourcePack> defaults = net.minecraftforge.fml.relauncher.ReflectionHelper.getPrivateValue(Minecraft.class, Minecraft.getMinecraft(),
+                "defaultResourcePacks", "field_110449_ao");
+        defaults.add(new FileResourcePack(zip) {
+            @Override
+            public String getPackName() {
+                return "Better 1.12.2 Modern Content";
+            }
+        });
+    }
 
     private ContentClient() {}
 
@@ -263,7 +280,7 @@ public final class ContentClient {
                 continue;
             }
             String mod = block.getRegistryName().getNamespace();
-            boolean all = detailed.contains(mod);
+            boolean all = detailed.contains(mod) || detailed.contains("*");
             String found = null;
             try {
                 List<IBlockState> states = all ? block.getBlockState().getValidStates() : java.util.Collections.singletonList(block.getDefaultState());
@@ -294,8 +311,13 @@ public final class ContentClient {
             String mod = item.getRegistryName().getNamespace();
             net.minecraft.util.NonNullList<ItemStack> stacks = net.minecraft.util.NonNullList.create();
             try {
-                if (detailed.contains(mod)) {
-                    item.getSubItems(net.minecraft.creativetab.CreativeTabs.SEARCH, stacks);
+                if (detailed.contains(mod) || detailed.contains("*")) {
+                    // As JEI lists them: what each of the item's own creative tabs shows (AE2 lists facades only in its facade tab).
+                    for (net.minecraft.creativetab.CreativeTabs tab : item.getCreativeTabs()) {
+                        if (tab != null) {
+                            item.getSubItems(tab, stacks);
+                        }
+                    }
                 }
             } catch (RuntimeException e) {
                 stacks.clear();
@@ -303,12 +325,17 @@ public final class ContentClient {
             if (stacks.isEmpty()) {
                 stacks.add(new ItemStack(item));
             }
+            int shown = 0;
             for (ItemStack stack : stacks) {
                 try {
                     IBakedModel model = mc.getRenderItem().getItemModelWithOverrides(stack, null, null);
                     if (!model.isBuiltInRenderer() && placeholder(model, null)) {
-                        note(counts, names, mod, item.getRegistryName().getPath() + (stack.getMetadata() != 0 ? "@" + stack.getMetadata() : "") + " (item)");
-                        break;
+                        // Items told apart by NBT (AE2 facades, for one) are named by what they show.
+                        note(counts, names, mod, item.getRegistryName().getPath() + (stack.getMetadata() != 0 ? "@" + stack.getMetadata() : "")
+                                + (stack.hasTagCompound() ? " [" + stack.getDisplayName() + "]" : "") + " (item)");
+                        if (!stack.hasTagCompound() || ++shown >= 12) {
+                            break;
+                        }
                     }
                 } catch (RuntimeException e) {
                     break;
@@ -321,7 +348,7 @@ public final class ContentClient {
             summary.append(summary.length() == 0 ? "" : ", ").append(entry.getKey()).append(' ').append(entry.getValue());
         }
         lines.add("placeholder textures by mod: " + (summary.length() == 0 ? "none" : summary));
-        for (String mod : detailed) {
+        for (String mod : detailed.contains("*") ? names.keySet() : detailed) {
             if (names.containsKey(mod)) {
                 lines.add("placeholder textures in " + mod + ": " + names.get(mod));
             }

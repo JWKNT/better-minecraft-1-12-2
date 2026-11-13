@@ -19,18 +19,30 @@ final class ItemGrid extends GuiScreen {
     private final String title;
     private final int page;
     private int perPage;
+    private boolean written;
 
     ItemGrid(String domains, int page) {
         this.page = page;
         java.util.Set<String> wanted = new java.util.HashSet<String>(java.util.Arrays.asList(domains.split(",")));
+        if (wanted.contains("jei") && net.minecraftforge.fml.common.Loader.isModLoaded("jei")) {
+            // What a player sees: JEI's own list, without the items the pack hides.
+            stacks.addAll(better112.jei.JeiBridge.shownItems());
+            wanted.clear();
+        }
         for (Item item : Item.REGISTRY) {
             ResourceLocation name = Item.REGISTRY.getNameForObject(item);
-            if (name == null || !wanted.contains(name.getNamespace())) {
+            // A mod's namespace, or one item's full name written with a slash ("appliedenergistics2/facade").
+            if (name == null || !wanted.contains("*") && !wanted.contains(name.getNamespace()) && !wanted.contains(name.toString().replace(':', '/'))) {
                 continue;
             }
             NonNullList<ItemStack> subs = NonNullList.create();
             try {
-                item.getSubItems(CreativeTabs.SEARCH, subs);
+                // As JEI lists them: what each of the item's own creative tabs shows.
+                for (CreativeTabs tab : item.getCreativeTabs()) {
+                    if (tab != null) {
+                        item.getSubItems(tab, subs);
+                    }
+                }
             } catch (Throwable t) {
                 // some items need a world to list their kinds
             }
@@ -66,6 +78,42 @@ final class ItemGrid extends GuiScreen {
             }
         }
         RenderHelper.disableStandardItemLighting();
+        if (!written) {
+            written = true;
+            writeLayout(cell, cols);
+        }
+    }
+
+    /**
+     * Writes where each item of this page sits, in screen pixels, so a script can find the cells
+     * of a screenshot that show the placeholder texture and name the items in them.
+     */
+    private void writeLayout(int cell, int cols) {
+        int factor = new net.minecraft.client.gui.ScaledResolution(mc).getScaleFactor();
+        StringBuilder out = new StringBuilder();
+        out.append("factor ").append(factor).append(" cell ").append(cell).append(" cols ").append(cols).append(" x0 4 y0 16\n");
+        for (int i = 0; i < perPage; i++) {
+            int index = page * perPage + i;
+            if (index >= stacks.size()) {
+                break;
+            }
+            ItemStack stack = stacks.get(index);
+            String id = String.valueOf(stack.getItem().getRegistryName()) + "@" + stack.getMetadata();
+            try {
+                id += stack.hasTagCompound() ? " [" + stack.getDisplayName() + "]" : "";
+            } catch (Throwable t) {
+                // a name that needs a world
+            }
+            out.append(i).append('\t').append(id).append('\n');
+        }
+        java.io.File file = new java.io.File(mc.gameDir, "better112-autotest/itemgrid_" + (better112.config.BetterConfig.modernTextures ? "on" : "off")
+                + "_p" + page + ".txt");
+        try {
+            file.getParentFile().mkdirs();
+            java.nio.file.Files.write(file.toPath(), out.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (java.io.IOException e) {
+            // the self-test reports the missing file
+        }
     }
 
     @Override

@@ -24,7 +24,6 @@ import javax.imageio.ImageIO;
 import better112.Better112;
 import better112.config.BetterConfig;
 import better112.content.BlockDef.Kind;
-import better112.textures.ModernTextures;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -33,9 +32,6 @@ import net.minecraft.block.Block;
 import net.minecraft.block.SoundType;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.resources.FileResourcePack;
-import net.minecraft.client.resources.IResourcePack;
 import net.minecraft.creativetab.CreativeTabs;
 import net.minecraft.init.Blocks;
 import net.minecraft.init.Items;
@@ -47,9 +43,9 @@ import net.minecraft.util.ResourceLocation;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.RegistryEvent;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
-import net.minecraftforge.fml.relauncher.ReflectionHelper;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
+import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.oredict.OreDictionary;
 
 /**
@@ -183,12 +179,16 @@ public final class ModernContent {
     // Startup: read the jars, build the pack
     // ------------------------------------------------------------------------------------
 
-    /** Called while the mod is constructed, before the game reads its resource packs. */
-    public static void prepare() {
-        File gameDir = Minecraft.getMinecraft().gameDir;
+    /**
+     * Called while the mod is constructed, on both sides: before the registries open, and in the
+     * game before it reads its resource packs. Returns the resource pack with the looks of the
+     * blocks, for the game client to add, or null.
+     */
+    public static File prepare(File gameDir) {
+        boolean client = FMLCommonHandler.instance().getSide().isClient();
         List<String> notes = new ArrayList<String>();
         try {
-            games = ModernTextures.modernGameJars(gameDir);
+            games = GameJars.games(gameDir);
         } catch (RuntimeException e) {
             games = new ArrayList<File>();
         }
@@ -197,18 +197,23 @@ public final class ModernContent {
         if (!BetterConfig.importBiomesOPlenty) {
             notes.add("Biomes O' Plenty import is switched off");
         } else if (bop == null) {
-            notes.add("no Biomes O' Plenty jar for Minecraft 1.19.3 or newer was found (better112/modern_mods or another launcher instance)");
+            notes.add("no Biomes O' Plenty jar for Minecraft 1.19.3 or newer was found (better112/modern_mods"
+                    + (client ? " or another launcher instance)" : ")"));
         }
         if (!BetterConfig.importModernVanilla) {
             notes.add("modern Minecraft blocks are switched off");
         } else if (game == null) {
-            notes.add("no modern Minecraft was found on this computer");
+            notes.add(client ? "no modern Minecraft was found on this computer" : "no modern Minecraft client jar in better112/modern_mods");
         }
         if (bop == null && game == null) {
             status = join(notes);
             Better112.LOG.info("Modern content: {}", status);
-            return;
+            if (client) {
+                better112.world.feature.Imported.set(LOOKUP);
+            }
+            return null;
         }
+        File packFile = null;
         List<ZipFile> vanilla = new ArrayList<ZipFile>();
         ZipFile mod = null;
         try {
@@ -254,7 +259,7 @@ public final class ModernContent {
             if (DEFS.isEmpty()) {
                 notes.add("the jars held no blocks this mod can read");
                 status = join(notes);
-                return;
+                return null;
             }
             // The pack is rebuilt when a jar changes and when this mod reads the same jars differently than before.
             long reading = 17L;
@@ -264,7 +269,8 @@ public final class ModernContent {
             String stamp = stampText.append("blocks ").append(DEFS.size()).append(' ').append(reading).append('\n').toString();
             boolean fresh = zip.isFile() && stampFile.isFile()
                     && stamp.equals(new String(Files.readAllBytes(stampFile.toPath()), StandardCharsets.UTF_8));
-            if (!fresh) {
+            // A server needs the blocks but not their looks.
+            if (client && !fresh) {
                 dir.mkdirs();
                 int files = pack.write(zip, "from " + (game == null ? "" : game.getName() + " ") + (bop == null ? "" : bop.getName()));
                 Files.write(stampFile.toPath(), stamp.getBytes(StandardCharsets.UTF_8));
@@ -273,14 +279,7 @@ public final class ModernContent {
                     Better112.LOG.warn("Modern content pack: not found in the jars: {}", pack.missing);
                 }
             }
-            List<IResourcePack> defaults = ReflectionHelper.getPrivateValue(Minecraft.class, Minecraft.getMinecraft(),
-                    "defaultResourcePacks", "field_110449_ao");
-            defaults.add(new FileResourcePack(zip) {
-                @Override
-                public String getPackName() {
-                    return "Better 1.12.2 Modern Content";
-                }
-            });
+            packFile = client ? zip : null;
             MinecraftForge.EVENT_BUS.register(ModernContent.class);
             List<String> parts = new ArrayList<String>();
             for (Source source : ALL) {
@@ -292,7 +291,8 @@ public final class ModernContent {
             }
             parts.addAll(notes);
             status = join(parts);
-            Better112.LOG.info("Modern content: {} ({} ms). Not brought over: {}", status, System.currentTimeMillis() - start, SKIPPED);
+            Better112.LOG.info("Modern content: {} ({} ms), signature {}. Not brought over: {}", status, System.currentTimeMillis() - start,
+                    Long.toHexString(reading), SKIPPED);
         } catch (Throwable t) {
             DEFS.clear();
             BOP.jar = null;
@@ -317,6 +317,8 @@ public final class ModernContent {
         }
         // The biomes are registered even if no block could be read: they fall back on 1.12.2 blocks.
         MinecraftForge.EVENT_BUS.register(better112.world.gen.ImportedBiomes.class);
+        better112.world.feature.Imported.set(LOOKUP);
+        return packFile;
     }
 
     private static String join(List<String> parts) {
@@ -339,9 +341,7 @@ public final class ModernContent {
     }
 
     private static File findJar(File gameDir) {
-        List<File> folders = new ArrayList<File>();
-        folders.add(new File(gameDir, "better112/modern_mods"));
-        folders.addAll(ModernTextures.modernModFolders(gameDir));
+        List<File> folders = GameJars.modFolders(gameDir);
         File best = null;
         for (File folder : folders) {
             File[] files = folder.listFiles();
@@ -370,7 +370,8 @@ public final class ModernContent {
             String name = e.nextElement().getName();
             if (name.startsWith(folder) && name.endsWith(".json")) {
                 String block = name.substring(folder.length(), name.length() - 5);
-                if (!source.vanilla() || VANILLA.matcher(block).matches()) {
+                // Biomes O' Plenty's "null" blocks are drawn as the missing-texture checker on purpose; here they would look broken.
+                if (source.vanilla() ? VANILLA.matcher(block).matches() : !block.startsWith("null_")) {
                     names.add(block);
                 }
             }
@@ -1308,6 +1309,39 @@ public final class ModernContent {
     public static String modNamespace() {
         return BOP.namespace;
     }
+
+    /** What the worldgen side may use of the imported blocks (see better112.world.feature.Imported). */
+    public static final better112.world.feature.Imported.Lookup LOOKUP = new better112.world.feature.Imported.Lookup() {
+        @Override
+        public Block block(String modernId) {
+            return ModernContent.block(modernId);
+        }
+
+        @Override
+        public boolean isTallPlant(Block block) {
+            return ModernContent.isTallPlant(block);
+        }
+
+        @Override
+        public boolean placeTall(net.minecraft.world.World world, net.minecraft.util.math.BlockPos pos, Block block, int flags) {
+            return ModernContent.placeTall(world, pos, block, flags);
+        }
+
+        @Override
+        public boolean isAquatic(Block block) {
+            return ModernContent.isAquatic(block);
+        }
+
+        @Override
+        public boolean placeAquatic(net.minecraft.world.World world, net.minecraft.util.math.BlockPos pos, IBlockState state, int flags) {
+            return ModernContent.placeAquatic(world, pos, state, flags);
+        }
+
+        @Override
+        public File sourceJar() {
+            return ModernContent.sourceJar();
+        }
+    };
 
     /** Self-test: the imported blocks of one source ("bop", "mc"), in the order of its files. */
     public static List<Block> showcaseBlocks(String prefix) {

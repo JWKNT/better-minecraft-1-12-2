@@ -23,22 +23,15 @@ final class ClientSetup {
         better112.cosmetic.WorldColors.registerEarly();
         // So does the ring rain makes on water.
         MinecraftForge.EVENT_BUS.register(new better112.cosmetic.RainRipples());
+        // And the textures VintageFix would leave out of it (EvilCraft's broom parts in DJ2).
+        better112.textures.LateSprites.install(net.minecraft.client.Minecraft.getMinecraft().gameDir);
         // Blocks of modern mods have to be known before the registries open, and their looks before resources load.
-        // They are made in the client only: single-player worlds use them, and a server that lacks them simply
-        // leaves them out of the game when a client joins it.
-        better112.content.ModernContent.prepare();
+        // A dedicated server reads the same jars in Better112.construct, so that both sides have the same blocks.
+        better112.content.ContentClient.addPack(better112.content.ModernContent.prepare(net.minecraft.client.Minecraft.getMinecraft().gameDir));
         MinecraftForge.EVENT_BUS.register(better112.content.ContentClient.class);
     }
 
     static void init() {
-        better112.world.gen.ModernWorld.init();
-        better112.content.ModernContent.init();
-        better112.content.ModernContent.setSaplingTrees(new better112.content.ModernContent.SaplingTrees() {
-            @Override
-            public boolean grow(String sapling, net.minecraft.world.World world, net.minecraft.util.math.BlockPos pos, java.util.Random random) {
-                return better112.world.gen.ImportedBiomes.growSapling(sapling, world, pos, random);
-            }
-        });
         better112.content.ContentClient.init();
         ClientTweaks.init();
         better112.chat.Emotes.init();

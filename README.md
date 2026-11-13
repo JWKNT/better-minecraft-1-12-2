@@ -4,16 +4,30 @@ One Forge mod that brings modern Minecraft's quality of life, looks and frame ra
 1.12.2, the version the big expert packs still live on. Built around Divine Journey 2, but it
 depends on no other mod: every integration switches itself off when its partner is missing.
 
-Download `better112-0.1.0.jar` from the
+Download `better112-0.1.1.jar` from the
 [releases](https://github.com/JWKNT/better-minecraft-1-12-2/releases) and put it in the game's
 `mods` folder.
 
-**Multiplayer.** Nearly everything happens in your own game, so it works on any server: one
-that has the mod and one that does not. Players without the mod can join a server that has it.
-On a server the mod adds `/locatebiome` for every player; everything else on the server stays as
-it was. Tested with a Divine Journey 2 2.23.4 server in all three cases. The imported blocks and
-biomes and the Modern Terrain world type are for single-player worlds: a server without them
-leaves them out of the game when you join it.
+**Multiplayer.** A player with the mod can join any server. On a server without the mod, the
+imported blocks and biomes are left out of the game while you play there. A server with the mod
+has everything a single-player world has: the imported blocks and biomes, Modern Terrain and
+`/locatebiome`. Every player who joins it needs the same version of the mod, and the server
+turns away anyone without it. Tested with Divine Journey 2 2.23.4, on a server on the same
+computer and on a hosted one.
+
+**Setting up a server.** Put the jar in the server's `mods` folder. Make a `better112/modern_mods`
+folder next to `mods` and put in it the two modern jars the players' games read:
+
+- the Minecraft client jar of the version the games use (1.21.10 here: Mojang's `client.jar`
+  for that version, under any name that ends in `.jar`), and
+- `BiomesOPlenty-forge-1.20.1-19.0.0.96.jar` (Biomes O' Plenty for 1.20.1).
+
+Set `level-type=better112modern` in `server.properties` before the world is first made. The
+server's log and each game's log have a line "Modern content: ..., signature ...", and the
+signatures must be the same, or Forge refuses the player because blocks are missing on one
+side. A game reads the newest modern Minecraft it finds in the launchers on the computer; to
+hold every player to one version, put that same client jar in the game's own
+`better112/modern_mods` folder, which comes first.
 
 ## What it does
 
@@ -233,6 +247,12 @@ the modern release left unchanged are skipped. A texture that joins up with its 
 joining, and its joined-up sheet is replaced together with the plain one, or not at all.
 The Modern Textures option in the menu says what was found.
 
+**Textures VintageFix leaves out.** VintageFix (in DJ2) loads only the textures that model
+files name, so a texture a mod names in its code shows the purple-and-black placeholder. In
+DJ2 that was EvilCraft's broom parts. The mod puts those textures in the atlas itself: the
+ones known from DJ2, and every one VintageFix reports as "not discovered during texture pass",
+which it keeps in `better112/late_sprites.txt` for the next start.
+
 | Mod | Textures that change | Notes |
 | --- | --- | --- |
 | DivineRPG | about 1,000 | redrawn throughout, names kept |
@@ -277,9 +297,9 @@ other mods add ores, trees and structures through the usual Forge hooks. Overwor
 that other mods add (Traverse, Biomes O' Plenty) join the layout wherever the climate
 calls for the same kind of place.
 
-What it does not have: the part of a modern world below y 0. Sea level stays at 63. The
-mod is client-only, so the world type works in single player; a server would need a server
-build of the mod.
+What it does not have: the part of a modern world below y 0. Sea level stays at 63. A
+dedicated server reads the same data from the jars in its `better112/modern_mods` (see
+Setting up a server above).
 
 **Modern Minecraft's own blocks and biomes.** The newer biomes are made of blocks 1.12.2
 does not have, so those come first: 178 blocks read from the newest Minecraft installed
