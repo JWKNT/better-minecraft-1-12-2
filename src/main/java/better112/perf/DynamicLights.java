@@ -122,8 +122,11 @@ public final class DynamicLights {
         int mode = BetterConfig.dynamicLights;
         if (mode == 0 || mc.world == null || mc.getRenderViewEntity() == null) {
             if (!TRACKED.isEmpty() || sources.length > 0) {
-                for (Tracked t : TRACKED.values()) {
-                    markDirty(mc, t.x, t.y, t.z, t.level);
+                // Redrawn without their light, unless the world has been left: then its chunks are gone too.
+                if (mc.world != null) {
+                    for (Tracked t : TRACKED.values()) {
+                        markDirty(mc, t.x, t.y, t.z, t.level);
+                    }
                 }
                 TRACKED.clear();
                 sources = NONE;
@@ -229,6 +232,9 @@ public final class DynamicLights {
 
     /** Queues a rebuild of every chunk section the light at this spot reaches. */
     private static void markDirty(Minecraft mc, double x, double y, double z, float level) {
+        if (mc.world == null) {
+            return; // no world, no chunks to redraw: the renderer has let go of them
+        }
         // One block more than the reach: a block face is lit by the air in front of it.
         double r = level * REACH + 1.0D;
         int x0 = MathHelper.floor(x - r) >> 4, x1 = MathHelper.floor(x + r) >> 4;

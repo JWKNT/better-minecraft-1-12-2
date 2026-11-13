@@ -1035,6 +1035,21 @@ public final class AutoTest {
             case "viewstate":
                 report.add("perspective now " + mc.gameSettings.thirdPersonView);
                 break;
+            case "leave": {
+                // leave - out of the world as the pause menu's Disconnect button does it
+                report.add("leaving with " + better112.perf.DynamicLights.sourceCount() + " dynamic light source(s)");
+                boolean integrated = mc.isIntegratedServerRunning();
+                mc.world.sendQuittingDisconnectingPacket();
+                mc.loadWorld(null);
+                mc.displayGuiScreen(integrated ? new net.minecraft.client.gui.GuiMainMenu()
+                        : new net.minecraft.client.gui.GuiMultiplayer(new net.minecraft.client.gui.GuiMainMenu()));
+                waitTicks = 20;
+                break;
+            }
+            case "screenname":
+                report.add("screen now " + (mc.currentScreen == null ? "none" : mc.currentScreen.getClass().getSimpleName())
+                        + ", world " + (mc.world == null ? "none" : "loaded"));
+                break;
             case "chatclear":
                 mc.ingameGUI.getChatGUI().clearChatMessages(false);
                 break;
