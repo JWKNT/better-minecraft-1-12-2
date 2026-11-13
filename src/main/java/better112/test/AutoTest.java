@@ -79,6 +79,7 @@ public final class AutoTest {
     private int fpsStartMarked;
     private int screenWaitTicks;
     private String pendingShot;
+    private int hudMode;
     private int shotDelayFrames;
 
     private long fpsEndNanos;
@@ -1023,6 +1024,25 @@ public final class AutoTest {
             case "viewstate":
                 report.add("perspective now " + mc.gameSettings.thirdPersonView);
                 break;
+            case "chatclear":
+                mc.ingameGUI.getChatGUI().clearChatMessages(false);
+                break;
+            case "hud":
+                // hud:off | hud:bare | hud:on - off is F1, for pictures of the world alone. The game draws
+                // the overlay under any open screen, the idle screen too, so it is also cancelled here.
+                // bare keeps only what is drawn after the whole overlay (arrival titles), without the hand.
+                hudMode = arg.equals("off") ? 1 : arg.equals("bare") ? 2 : 0;
+                mc.gameSettings.hideGUI = hudMode == 1;
+                waitTicks = 3;
+                break;
+            case "fly":
+                // fly:on | fly:off - a creative player stays in the air after a teleport
+                if (mc.player != null) {
+                    mc.player.capabilities.isFlying = arg.equals("on");
+                    mc.player.sendPlayerAbilities();
+                }
+                waitTicks = 3;
+                break;
             case "volume":
                 better112.qol.ViewTweaks.testBackground = arg.equals("bg");
                 waitTicks = 3;
@@ -1198,6 +1218,21 @@ public final class AutoTest {
             pieces++;
         }
         chatSeen.add(text + "  (" + pieces + " pieces)");
+    }
+
+    @SubscribeEvent
+    public void onOverlay(net.minecraftforge.client.event.RenderGameOverlayEvent.Pre event) {
+        boolean all = event.getType() == net.minecraftforge.client.event.RenderGameOverlayEvent.ElementType.ALL;
+        if (hudMode == 1 && all || hudMode == 2 && !all) {
+            event.setCanceled(true);
+        }
+    }
+
+    @SubscribeEvent
+    public void onHand(net.minecraftforge.client.event.RenderHandEvent event) {
+        if (hudMode != 0) {
+            event.setCanceled(true);
+        }
     }
 
     @SubscribeEvent
