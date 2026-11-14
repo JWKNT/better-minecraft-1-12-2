@@ -1046,9 +1046,50 @@ public final class AutoTest {
                 waitTicks = 20;
                 break;
             }
+            case "pause":
+                mc.displayGuiScreen(new net.minecraft.client.gui.GuiIngameMenu());
+                waitTicks = 5;
+                break;
+            case "f3":
+                mc.gameSettings.showDebugInfo = arg.equals("on");
+                waitTicks = 3;
+                break;
+            case "dim": {
+                // dim:ID - the player moves to that dimension, onto the ground (no portal is built)
+                final int target = Integer.parseInt(arg);
+                final net.minecraft.server.integrated.IntegratedServer server = mc.getIntegratedServer();
+                if (server != null && mc.player != null) {
+                    final java.util.UUID id = mc.player.getUniqueID();
+                    server.addScheduledTask(new Runnable() {
+                        @Override
+                        public void run() {
+                            net.minecraft.entity.player.EntityPlayerMP sp = server.getPlayerList().getPlayerByUUID(id);
+                            sp.changeDimension(target, new net.minecraftforge.common.util.ITeleporter() {
+                                @Override
+                                public void placeEntity(net.minecraft.world.World world, net.minecraft.entity.Entity entity, float yaw) {
+                                    net.minecraft.util.math.BlockPos at = new net.minecraft.util.math.BlockPos(entity.posX, 0, entity.posZ);
+                                    int y = target == -1 ? 64 : world.getTopSolidOrLiquidBlock(at).getY() + 1;
+                                    if (target == -1) {
+                                        // An air pocket on a floor, under the Nether's roof.
+                                        for (net.minecraft.util.math.BlockPos p : net.minecraft.util.math.BlockPos.getAllInBox(at.add(-1, y, -1), at.add(1, y + 2, 1))) {
+                                            world.setBlockToAir(p);
+                                        }
+                                        world.setBlockState(at.add(0, y - 1, 0), net.minecraft.init.Blocks.NETHERRACK.getDefaultState());
+                                    }
+                                    entity.setLocationAndAngles(at.getX() + 0.5D, y, at.getZ() + 0.5D, yaw, 0.0F);
+                                    entity.motionX = entity.motionY = entity.motionZ = 0.0D;
+                                }
+                            });
+                        }
+                    });
+                }
+                waitTicks = 100;
+                break;
+            }
             case "screenname":
                 report.add("screen now " + (mc.currentScreen == null ? "none" : mc.currentScreen.getClass().getSimpleName())
-                        + ", world " + (mc.world == null ? "none" : "loaded"));
+                        + ", world " + (mc.world == null ? "none" : "loaded, dimension " + mc.world.provider.getDimension())
+                        + ", dynamic light sources " + better112.perf.DynamicLights.sourceCount());
                 break;
             case "chatclear":
                 mc.ingameGUI.getChatGUI().clearChatMessages(false);

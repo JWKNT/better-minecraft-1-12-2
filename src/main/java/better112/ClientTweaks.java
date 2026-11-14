@@ -231,6 +231,13 @@ public final class ClientTweaks {
     }
 
     @SubscribeEvent
+    public void onWorldUnload(WorldEvent.Unload event) {
+        if (event.getWorld().isRemote) {
+            Occlusion.forget();
+        }
+    }
+
+    @SubscribeEvent
     public void onTextureStitch(TextureStitchEvent.Post event) {
         Hooks.clearSpriteCache();
         better112.cosmetic.BetterGrass.clear();

@@ -119,6 +119,12 @@ public final class Occlusion {
         cachedChunk = null;
     }
 
+    /** The world was left: let go of it, so it is not held in memory on the title screen. */
+    public static void forget() {
+        world = null;
+        clear();
+    }
+
     private static State newState(int salt) {
         State state = new State();
         // Spread first checks out so a freshly loaded base is not tested in a single frame.
