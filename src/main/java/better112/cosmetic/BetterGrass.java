@@ -36,7 +36,8 @@ public final class BetterGrass {
 
     private static final FaceBakery BAKERY = new FaceBakery();
     /** The side quads made from each top texture, by horizontal index. */
-    private static final Map<TextureAtlasSprite, BakedQuad[]> SIDES = new ConcurrentHashMap<TextureAtlasSprite, BakedQuad[]>();
+    /** For each top texture, the four side quads, each in a list of its own: getQuads hands out the same list every time. */
+    private static final Map<TextureAtlasSprite, List<BakedQuad>[]> SIDES = new ConcurrentHashMap<TextureAtlasSprite, List<BakedQuad>[]>();
 
     private BetterGrass() {}
 
@@ -77,6 +78,12 @@ public final class BetterGrass {
 
     /** The top's texture laid on a whole side, tinted as the top is. */
     static BakedQuad side(IBakedModel model, IBlockState state, EnumFacing side) {
+        List<BakedQuad> list = sideList(model, state, side);
+        return list == null ? null : list.get(0);
+    }
+
+    @SuppressWarnings("unchecked")
+    static List<BakedQuad> sideList(IBakedModel model, IBlockState state, EnumFacing side) {
         TextureAtlasSprite top = null;
         int tint = -1;
         for (BakedQuad quad : model.getQuads(state, EnumFacing.UP, 0L)) {
@@ -89,13 +96,13 @@ public final class BetterGrass {
         if (top == null) {
             return null;
         }
-        BakedQuad[] made = SIDES.get(top);
+        List<BakedQuad>[] made = SIDES.get(top);
         if (made == null) {
-            made = new BakedQuad[4];
+            made = new List[4];
             for (EnumFacing face : EnumFacing.HORIZONTALS) {
                 BlockPartFace part = new BlockPartFace(face, tint, "#top", new BlockFaceUV(new float[] {0.0F, 0.0F, 16.0F, 16.0F}, 0));
-                made[face.getHorizontalIndex()] = BAKERY.makeBakedQuad(new Vector3f(0.0F, 0.0F, 0.0F), new Vector3f(16.0F, 16.0F, 16.0F),
-                        part, top, face, ModelRotation.X0_Y0, null, false, true);
+                made[face.getHorizontalIndex()] = Collections.singletonList(BAKERY.makeBakedQuad(new Vector3f(0.0F, 0.0F, 0.0F),
+                        new Vector3f(16.0F, 16.0F, 16.0F), part, top, face, ModelRotation.X0_Y0, null, false, true));
             }
             SIDES.put(top, made);
         }
@@ -115,9 +122,9 @@ public final class BetterGrass {
         @Override
         public List<BakedQuad> getQuads(IBlockState state, EnumFacing side, long rand) {
             if (side != null && side.getHorizontalIndex() >= 0 && (mask & 1 << side.getHorizontalIndex()) != 0) {
-                BakedQuad quad = side(model, state, side);
+                List<BakedQuad> quad = sideList(model, state, side);
                 if (quad != null) {
-                    return Collections.singletonList(quad);
+                    return quad;
                 }
             }
             return model.getQuads(state, side, rand);

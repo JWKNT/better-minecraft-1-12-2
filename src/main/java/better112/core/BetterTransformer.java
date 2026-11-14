@@ -238,7 +238,73 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
         PATCHES.put("net.minecraft.client.renderer.chunk.RenderChunk", new ClassPatch() {
             @Override
             public boolean apply(ClassNode c) {
-                return patchRenderChunk(c);
+                boolean changed = patchRenderChunk(c);
+                // The section builder asks for BlockRenderLayer.values() for every block, and each call copies the array.
+                changed |= cachedValues("chunk_layers", find(c, "(FFFLnet/minecraft/client/renderer/chunk/ChunkCompileTaskGenerator;)V",
+                        "rebuildChunk", "func_178581_b"), "net/minecraft/util/BlockRenderLayer", "RENDER_LAYERS");
+                return changed;
+            }
+        });
+
+        PATCHES.put("net.minecraftforge.client.model.pipeline.ForgeBlockModelRenderer", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Forge's block model renderer goes through EnumFacing.values() for every block it draws.
+                boolean changed = false;
+                for (MethodNode m : c.methods) {
+                    if (m.name.equals("render") && (m.access & ACC_STATIC) != 0) {
+                        changed |= cachedValues("model_facings", m, "net/minecraft/util/EnumFacing", "FACINGS");
+                    }
+                }
+                return changed;
+            }
+        });
+
+        PATCHES.put("mcp.mobius.waila.overlay.DisplayUtil", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Hwyla holds its patterns compiled, but hands their text to String.replaceAll, which compiles them
+                // again on every call: several times each tick while a tooltip is up.
+                return replaceCall("waila_patterns", find(c, "(Ljava/lang/String;)Ljava/lang/String;", "stripWailaSymbols"), INVOKEVIRTUAL,
+                        "java/lang/String", "replaceAll", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "replaceAll",
+                        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+            }
+        });
+
+        PATCHES.put("net.minecraft.client.multiplayer.WorldClient", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Each tick the client sets doDaylightCycle again to the value it already has; the rule then tries
+                // to read "true" as a number twice and throws two exceptions doing it.
+                return replaceCall("daylight_rule", find(c, "(J)V", "setWorldTime", "func_72877_b"), INVOKEVIRTUAL,
+                        "net/minecraft/world/GameRules", "func_82764_b|setOrCreateGameRule", "(Ljava/lang/String;Ljava/lang/String;)V",
+                        "setRuleIfChanged", "(Lnet/minecraft/world/GameRules;Ljava/lang/String;Ljava/lang/String;)V");
+            }
+        });
+
+        PATCHES.put("com.bewitchment.api.message.SyncExtendedPlayer$Handler", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Bewitchment applies a player sync on the client without checking that there is a player: one that
+                // arrives just as you leave a server crashes the game. Without a player there is nothing to sync.
+                MethodNode m = null;
+                for (MethodNode each : c.methods) {
+                    if (each.name.startsWith("lambda$onMessage$") && each.desc.equals("(Lcom/bewitchment/api/message/SyncExtendedPlayer;)V")) {
+                        m = each;
+                    }
+                }
+                return cancelIf("bewitchment_sync", m, "noClientPlayer", "()Z");
+            }
+        });
+
+        PATCHES.put("journeymap.client.model.RegionImageSet", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // JourneyMap copies a chunk's 16x16 piece of a 512x512 map image with getData(), which in Java 8
+                // allocates a buffer as large as the whole image (about 1 MB) for a piece; three times per chunk drawn.
+                MethodNode m = find(c, null, "getChunkImage");
+                return replaceCall("journeymap_chunk_image", m, INVOKEVIRTUAL, "java/awt/image/BufferedImage", "getData",
+                        "()Ljava/awt/image/Raster;", "pieceRaster", "(Ljava/awt/image/BufferedImage;)Ljava/awt/image/Raster;");
             }
         });
 
@@ -900,6 +966,62 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
     }
 
     /** Swaps reads of one instance field for {@code Hooks.hook(owner)}. */
+    /**
+     * Every call of an enum's values() in the method becomes a read of a RenderArrays field that holds the same
+     * array once: values() hands out a fresh copy on each call. Only for client methods that just read the array.
+     */
+    private static boolean cachedValues(String id, MethodNode m, String owner, String field) {
+        if (m == null || !PatchState.enabled(id)) {
+            PatchState.failed(id);
+            return false;
+        }
+        String desc = "()[L" + owner + ";";
+        boolean changed = false;
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+            if (n.getOpcode() == INVOKESTATIC && ((MethodInsnNode) n).owner.equals(owner) && ((MethodInsnNode) n).name.equals("values")
+                    && ((MethodInsnNode) n).desc.equals(desc)) {
+                FieldInsnNode read = new FieldInsnNode(GETSTATIC, "better112/perf/RenderArrays", field, "[L" + owner + ";");
+                m.instructions.set(n, read);
+                n = read;
+                changed = true;
+            }
+        }
+        if (changed) {
+            PatchState.applied(id);
+        } else {
+            PatchState.failed(id);
+        }
+        return changed;
+    }
+
+    /**
+     * Every call of owner.name+desc in the method becomes a call of a static Hooks method that takes the same values.
+     * The name may list the SRG and MCP names of a method, joined with |.
+     */
+    private static boolean replaceCall(String id, MethodNode m, int opcode, String owner, String name, String desc, String hook, String hookDesc) {
+        if (m == null || !PatchState.enabled(id)) {
+            PatchState.failed(id);
+            return false;
+        }
+        java.util.List<String> names = java.util.Arrays.asList(name.split("\\|"));
+        boolean changed = false;
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+            if (n.getOpcode() == opcode && ((MethodInsnNode) n).owner.equals(owner) && names.contains(((MethodInsnNode) n).name)
+                    && ((MethodInsnNode) n).desc.equals(desc)) {
+                MethodInsnNode call = new MethodInsnNode(INVOKESTATIC, HOOKS, hook, hookDesc, false);
+                m.instructions.set(n, call);
+                n = call;
+                changed = true;
+            }
+        }
+        if (changed) {
+            PatchState.applied(id);
+        } else {
+            PatchState.failed(id);
+        }
+        return changed;
+    }
+
     private static boolean replaceFieldRead(String id, MethodNode m, String owner, String hook, String hookDesc, String... fieldNames) {
         if (m == null || !PatchState.enabled(id)) {
             PatchState.failed(id);

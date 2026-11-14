@@ -40,6 +40,42 @@ public final class Hooks {
 
     private Hooks() {}
 
+    private static final Map<String, java.util.regex.Pattern> PATTERNS = new ConcurrentHashMap<String, java.util.regex.Pattern>();
+
+    /** String.replaceAll, with the pattern compiled once per expression instead of on every call. */
+    public static String replaceAll(String text, String regex, String replacement) {
+        java.util.regex.Pattern pattern = PATTERNS.get(regex);
+        if (pattern == null) {
+            if (PATTERNS.size() > 64) {
+                PATTERNS.clear();
+            }
+            pattern = java.util.regex.Pattern.compile(regex);
+            PATTERNS.put(regex, pattern);
+        }
+        return pattern.matcher(text).replaceAll(replacement);
+    }
+
+    /** True once the client has left its world: client-side work for the player has nothing to act on. */
+    public static boolean noClientPlayer() {
+        return net.minecraft.client.Minecraft.getMinecraft().player == null;
+    }
+
+    /** Sets a game rule only when its value changes: setting one makes it parse the text as numbers, which throws for "true". */
+    public static void setRuleIfChanged(net.minecraft.world.GameRules rules, String key, String value) {
+        if (!rules.hasRule(key) || !value.equals(rules.getString(key))) {
+            rules.setOrCreateGameRule(key, value);
+        }
+    }
+
+    /**
+     * JourneyMap's chunk piece of a map image, copied as getData() would but into a buffer of the piece's own
+     * size: getData() on a piece of an image allocates one as large as the whole image.
+     */
+    public static java.awt.image.Raster pieceRaster(java.awt.image.BufferedImage piece) {
+        java.awt.image.Raster raster = piece.getRaster();
+        return piece.getData(new java.awt.Rectangle(raster.getMinX(), raster.getMinY(), piece.getWidth(), piece.getHeight()));
+    }
+
     /** Frames rendered so far; advanced by ClientTweaks at the start of every frame. */
     public static int frame;
 

@@ -3,11 +3,13 @@ package better112.cosmetic;
 import java.util.Random;
 
 import better112.config.BetterConfig;
+import net.minecraft.block.Block;
 import net.minecraft.block.BlockLeaves;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.particle.ParticleDigging;
+import net.minecraft.util.math.AxisAlignedBB;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.world.World;
@@ -70,6 +72,8 @@ public final class FallingLeaves {
     }
 
     static final class Leaf extends ParticleDigging {
+        /** Particles only move on the client thread. */
+        private static final BlockPos.MutableBlockPos AT = new BlockPos.MutableBlockPos();
         private final float phase = RANDOM.nextFloat() * 6.28F;
         private final double driftX = (RANDOM.nextDouble() - 0.5) * 0.02, driftZ = (RANDOM.nextDouble() - 0.5) * 0.02;
         private int restTicks;
@@ -105,10 +109,42 @@ public final class FallingLeaves {
             motionY = Math.max(motionY - 0.0012, -0.045);
             motionX = driftX + MathHelper.sin(t) * 0.025;
             motionZ = driftZ + MathHelper.cos(t * 0.8F) * 0.018;
-            move(motionX, motionY, motionZ);
-            if (world.getBlockState(new BlockPos(posX, posY, posZ)).getMaterial().isLiquid()) {
+            // A leaf only drifts and falls, so the blocks at its next spot are all it can meet. The game's own
+            // move() asks the world for every collision box near the particle, which made most of the
+            // garbage of falling leaves.
+            double x = posX, y = posY + motionY, z = posZ;
+            double top = topBelow(world, x, y, z);
+            if (y <= top && posY >= top - 0.001D) {
+                y = top;
+                onGround = true;
+                motionX = motionY = motionZ = 0.0D;
+            } else if (!solidAt(world, x + motionX, y, z + motionZ)) {
+                x += motionX;
+                z += motionZ;
+            }
+            AxisAlignedBB box = getBoundingBox();
+            setBoundingBox(box.offset(x - posX, y - posY, z - posZ));
+            posX = x;
+            posY = y;
+            posZ = z;
+            if (world.getBlockState(AT.setPos(posX, posY, posZ)).getMaterial().isLiquid()) {
                 setExpired(); // a leaf in water or lava is simply gone
             }
+        }
+
+        /** The height a leaf at this spot lands on: the top of the solid part of the block it is in, or below everything. */
+        private static double topBelow(World world, double x, double y, double z) {
+            AT.setPos(x, y, z);
+            IBlockState state = world.getBlockState(AT);
+            AxisAlignedBB solid = state.getCollisionBoundingBox(world, AT);
+            return solid == null || solid == Block.NULL_AABB ? Double.NEGATIVE_INFINITY : AT.getY() + solid.maxY;
+        }
+
+        private static boolean solidAt(World world, double x, double y, double z) {
+            AT.setPos(x, y, z);
+            IBlockState state = world.getBlockState(AT);
+            AxisAlignedBB solid = state.getCollisionBoundingBox(world, AT);
+            return solid != null && solid != Block.NULL_AABB && y < AT.getY() + solid.maxY && y >= AT.getY() + solid.minY;
         }
     }
 }

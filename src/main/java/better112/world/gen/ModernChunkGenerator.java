@@ -1,7 +1,5 @@
 package better112.world.gen;
 
-import java.util.HashMap;
-import java.util.Map;
 
 import better112.world.ModernTerrain;
 
@@ -38,7 +36,8 @@ public final class ModernChunkGenerator extends ChunkGeneratorOverworld {
     /** Caves of the chunk being made: hidden while biomes lay their surface, cut out afterwards. */
     private final byte[] caves = new byte[16 * 16 * 256];
     private boolean hasCaves;
-    private final Map<Long, int[]> corners = new HashMap<Long, int[]>();
+    /** Keyed by the packed corner position, without boxing a Long for every lookup. */
+    private final it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<int[]> corners = new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<int[]>();
 
     public ModernChunkGenerator(World world, long seed, boolean structures, ModernTerrain terrain) {
         super(world, seed, structures, SETTINGS);
@@ -151,7 +150,7 @@ public final class ModernChunkGenerator extends ChunkGeneratorOverworld {
 
     /** {rough surface height, 1 if the sea covers this spot or one a chunk away, else 0} at a chunk corner. */
     private int[] corner(int x, int z) {
-        Long key = ((long) x << 32) | (z & 0xFFFFFFFFL);
+        long key = ((long) x << 32) | (z & 0xFFFFFFFFL);
         int[] value = corners.get(key);
         if (value == null) {
             if (corners.size() > 4096) {

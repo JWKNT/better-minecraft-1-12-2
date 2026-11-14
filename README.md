@@ -4,7 +4,7 @@ One Forge mod that brings modern Minecraft's quality of life, looks and frame ra
 1.12.2, the version the big expert packs still live on. Built around Divine Journey 2, but it
 depends on no other mod: every integration switches itself off when its partner is missing.
 
-Download `better112-0.1.4.jar` from the
+Download `better112-0.1.5.jar` from the
 [releases](https://github.com/JWKNT/better-minecraft-1-12-2/releases) and put it in the game's
 `mods` folder.
 
@@ -75,6 +75,14 @@ it).
   slider, a frame cap while the window is in the background.
 - Chunk builder thread count, always-deferred chunk updates, biome blend from off to 15x15,
   separate leaves and weather quality.
+- Less garbage, so fewer collection pauses: chunk building reuses the block layer and face
+  lists instead of copying them for every block; JourneyMap copies each chunk's 16x16 piece of
+  its map instead of a buffer the size of the whole 512x512 region (Java 8 does that for a
+  piece of an image); Hwyla's tooltip patterns are compiled once instead of on every tick; the
+  client stops resetting the daylight rule every tick (each reset threw two exceptions). In
+  Divine Journey 2 this cut the garbage made while walking by about half.
+- Bewitchment's player sync no longer crashes the game when one arrives just as you leave a
+  server: without a player there is nothing to sync.
 - Toggles for every kind of animation, particle group, sky element, fog, and for item
   frames, armor stands, paintings, piston animation, beacon beams and name tags.
 - Smart leaves: the outer layers of a canopy are drawn see-through, one solid layer behind

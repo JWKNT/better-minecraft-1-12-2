@@ -80,6 +80,7 @@ public final class AutoTest {
     private int screenWaitTicks;
     private String pendingShot;
     private int hudMode;
+    private Object recording;
     private int shotDelayFrames;
 
     private long fpsEndNanos;
@@ -1046,6 +1047,62 @@ public final class AutoTest {
                 waitTicks = 20;
                 break;
             }
+            case "jfr":
+                // jfr:start | jfr:start:objects | jfr:stop:NAME - a Flight Recorder recording around the steps between,
+                // written to better112-autotest/NAME.jfr (through reflection: the API is in the runtime, not in the build's classpath)
+                try {
+                    Class<?> recordingClass = Class.forName("jdk.jfr.Recording");
+                    if (arg.equals("start")) {
+                        Class<?> configClass = Class.forName("jdk.jfr.Configuration");
+                        Object config = configClass.getMethod("getConfiguration", String.class).invoke(null, "profile");
+                        recording = recordingClass.getConstructor(configClass).newInstance(config);
+                        if (p.length > 2 && p[2].equals("objects")) {
+                            // A class histogram of the heap at each collection: what is taking the memory.
+                            Object settings = recordingClass.getMethod("enable", String.class).invoke(recording, "jdk.ObjectCount");
+                            settings.getClass().getMethod("withThreshold", java.time.Duration.class).invoke(settings, java.time.Duration.ZERO);
+                        }
+                        recordingClass.getMethod("start").invoke(recording);
+                        report.add("flight recording started");
+                    } else if (recording != null) {
+                        recordingClass.getMethod("stop").invoke(recording);
+                        File out = new File(mc.gameDir, "better112-autotest/" + (p.length > 2 ? p[2] : "recording") + ".jfr");
+                        out.getParentFile().mkdirs();
+                        recordingClass.getMethod("dump", java.nio.file.Path.class).invoke(recording, out.toPath());
+                        recordingClass.getMethod("close").invoke(recording);
+                        recording = null;
+                        report.add("flight recording written to " + out.getName());
+                    }
+                } catch (Throwable t) {
+                    report.add("flight recording failed: " + t);
+                }
+                break;
+            case "mem": {
+                // mem:LABEL - heap in use after two full collections
+                Runtime runtime = Runtime.getRuntime();
+                System.gc();
+                System.gc();
+                long used = runtime.totalMemory() - runtime.freeMemory();
+                report.add(String.format("heap %s: %d MB used after collection, %d MB committed, %d MB max", arg, used >> 20,
+                        runtime.totalMemory() >> 20, runtime.maxMemory() >> 20));
+                break;
+            }
+            case "bewitchsync":
+                // bewitchsync - a Bewitchment player sync arriving now, as the server sends them (with or without a player)
+                try {
+                    Class<?> message = Class.forName("com.bewitchment.api.message.SyncExtendedPlayer");
+                    Class<?> handler = Class.forName("com.bewitchment.api.message.SyncExtendedPlayer$Handler");
+                    Object sync = message.getConstructor(net.minecraft.nbt.NBTTagCompound.class).newInstance(new net.minecraft.nbt.NBTTagCompound());
+                    java.lang.reflect.Constructor<net.minecraftforge.fml.common.network.simpleimpl.MessageContext> context =
+                            net.minecraftforge.fml.common.network.simpleimpl.MessageContext.class.getDeclaredConstructor(
+                                    net.minecraft.network.INetHandler.class, net.minecraftforge.fml.relauncher.Side.class);
+                    context.setAccessible(true);
+                    handler.getMethod("onMessage", message, net.minecraftforge.fml.common.network.simpleimpl.MessageContext.class)
+                            .invoke(handler.newInstance(), sync, context.newInstance(null, net.minecraftforge.fml.relauncher.Side.CLIENT));
+                    report.add("Bewitchment sync delivered, player " + (mc.player == null ? "gone" : "present"));
+                } catch (Throwable t) {
+                    report.add("Bewitchment sync: " + t);
+                }
+                break;
             case "pause":
                 mc.displayGuiScreen(new net.minecraft.client.gui.GuiIngameMenu());
                 waitTicks = 5;
