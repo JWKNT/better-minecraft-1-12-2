@@ -33,7 +33,7 @@ public class Better112 {
 
     public static final String MODID = "better112";
     public static final String NAME = "Better 1.12.2";
-    public static final String VERSION = "0.1.5";
+    public static final String VERSION = "0.1.6";
     public static final Logger LOG = LogManager.getLogger("Better112");
 
     /**
@@ -89,10 +89,18 @@ public class Better112 {
         }
     }
 
+    /** The game remapped its registry ids (a world was loaded or left): numbers kept by ModFixes may be stale. */
+    @Mod.EventHandler
+    public void idsRemapped(net.minecraftforge.fml.common.event.FMLModIdMappingEvent event) {
+        better112.perf.ModFixes.idsRemapped();
+    }
+
     /** Single player or a dedicated server: either way /locatebiome is offered. */
     @Mod.EventHandler
     public void serverStarting(FMLServerStartingEvent event) {
         event.registerServerCommand(new better112.qol.LocateBiome());
+        LOG.info("Patches applied: {}; failed: {}", new java.util.TreeSet<String>(better112.core.PatchState.appliedIds()),
+                new java.util.TreeSet<String>(better112.core.PatchState.failedIds()));
     }
 
     @Mod.EventHandler

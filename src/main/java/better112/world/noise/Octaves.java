@@ -70,6 +70,12 @@ public final class Octaves {
 
     /** Keeps coordinates small enough that the noise keeps its precision far from the origin. */
     public static double wrap(double v) {
+        // Near the origin the rounding below is 0 and v comes back as it is (the upper bound stays
+        // a block short of 2^24, where the sum can round up to 1). Java 8 has no fast floor on
+        // this Mac's processor, and almost every sample falls here.
+        if (v >= -1.6777216E7D && v < 1.6777215E7D) {
+            return v;
+        }
         return v - Math.floor(v / 3.3554432E7D + 0.5D) * 3.3554432E7D;
     }
 }

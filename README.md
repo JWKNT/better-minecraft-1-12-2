@@ -4,7 +4,7 @@ One Forge mod that brings modern Minecraft's quality of life, looks and frame ra
 1.12.2, the version the big expert packs still live on. Built around Divine Journey 2, but it
 depends on no other mod: every integration switches itself off when its partner is missing.
 
-Download `better112-0.1.5.jar` from the
+Download `better112-0.1.6.jar` from the
 [releases](https://github.com/JWKNT/better-minecraft-1-12-2/releases) and put it in the game's
 `mods` folder.
 
@@ -83,6 +83,72 @@ it).
   Divine Journey 2 this cut the garbage made while walking by about half.
 - Bewitchment's player sync no longer crashes the game when one arrives just as you leave a
   server: without a player there is nothing to sync.
+- Less work and garbage every frame: the game's table of loaded chunks (VintageFix's too)
+  starts small and grows to fit instead of starting at 16,384 slots that never shrink, and
+  VintageFix's entity lister skips chunks that have never held an entity instead of reading
+  their 16 empty lists twice a frame. HammerLib and Quark check the newest chat lines for
+  names and item links every frame; they no longer copy or re-strip the same text each time.
+  Particles are drawn without four new corner objects each (the same bytes as the game's own
+  drawing, checked on over 3,000 particles), read their light without a new position object,
+  and those that do not move (thousands of underwater ones near any water) skip the
+  collision work; the particle view test takes one sum per side of the view. The player
+  inventory's slot lookup (read for every slot every frame by Botania's HUD) no longer makes
+  an iterator per call. Moving things make a collision box only for blocks they touch, and
+  ray traces through blocks (Mekanism traces 40 blocks every frame; mobs trace to see) make
+  no new point or "missed" result per block crossed; 100,000 random rays gave the same
+  answers as the game's own code. Alfheim reads a block's neighbours' light without a new
+  position object per neighbour. The view test of every entity, block entity and chunk tries
+  the one corner of a box that decides it instead of all eight, with the same answer. Block
+  entities with Forge's default render box (Storage Drawers, for one) keep their box while
+  their block is unchanged, instead of working it out again every frame: with a wall of
+  drawers in view that was a tenth of the game thread. Items drawn in inventories and JEI's
+  list reuse their model's view transform instead of working it out again with new matrices
+  for every item in every frame, and Forge's item drawing reuses its two lists of the model's
+  quads instead of making new ones for every item in every frame. The height rain and snow
+  fall to is worked out with one position object instead of a new one for every block of the
+  column. Loading a texture from a picture file (the first time each mob, block entity or
+  screen picture is drawn) makes the upload buffer as large as the picture instead of 16 MB
+  every time; a check read pictures of six sizes back from the graphics card, pixel for
+  pixel. In Divine Journey 2 on a server, by the side of the sea, this cut the game thread's
+  garbage by about two thirds.
+- Less work every tick in a base: EnderIO no longer copies its table of tick listeners into
+  a new set twice a tick; mob attribute names are lower-cased once instead of on every lookup
+  and every new mob; mobs finding a path reuse one position object for the blocks they look
+  at; Industrial Foregoing no longer turns the id of every mob nearby into text every other
+  tick; Hwyla compiles the expression it splits tooltip lines with once. The server thread
+  keeps the chunk it looked up last: mobs and items ask for the chunk of every block they
+  look at, mostly the one they asked for a moment before. In a test base with 240 animals
+  that cut the server thread's chunk lookups from an eighth of its time to a thirtieth.
+- Faster world generation on a server or in single player: Modern Terrain shapes a chunk
+  about a quarter faster (the same blocks, checked bit for bit) and answers biome questions
+  for chunks not yet made directly instead of through the game's biome cache; biome lookups
+  by number no longer box the number; Underground Biomes answers "is this an ore it
+  re-textures, and with which block?" from a table instead of building text keys for every
+  block of every new chunk; Astral Sorcery stops its search of the 27 sections around each
+  placed block when no chunk nearby has a starlight network. On a test server in Divine
+  Journey 2, the server thread's time while a player explored fell by a quarter and its
+  garbage by more than half.
+- The quest book covers the whole window, so the world behind it is not drawn while it is
+  open: in Divine Journey 2 a chapter of the quest book drew about 250 frames a second
+  instead of 170.
+- Faster game and server start, and faster world loading: JEI builds its search in about
+  half the time (to see whether a node of its search tree already held an ingredient, it
+  read the node's whole list); TickCentral, LagGoggles' tick hook, checks each class the
+  game loads without reading all the code of every parent class (it hooks the same classes
+  as before); Thaumcraft works out an item's aspects from the recipes that make that item
+  instead of looking through every recipe in the game for each one; Forge's rebuild of the
+  stats list, on each world load and leave, takes the block and item stats out in one pass
+  instead of one at a time (about a second less per world load); four of Forge's own class
+  transformers are handed only the classes that have what they look for (a call to
+  System.exit, a @SubscribeEvent or @SideOnly mark, a parent class that is an event), and
+  every other class goes on as before (checked on every class of a start of Divine Journey
+  2: none changed); the data fixers check the block entities and entities of each chunk and
+  structure loaded against each fixer without making a new name for every check (Thaumic
+  Augmentation reads all of its spire structures on every world load); FermiumASM's sharing
+  of permission texts, run for every dimension loaded, goes only through the classes loaded
+  since its last run. In Divine Journey 2 on this computer the game reached the title screen
+  in about 99 seconds instead of 114 with 0.1.5, a server started in 70 instead of 80, and a
+  single-player world was ready to play in about 11 seconds instead of 12.6.
 - Toggles for every kind of animation, particle group, sky element, fog, and for item
   frames, armor stands, paintings, piston animation, beacon beams and name tags.
 - Smart leaves: the outer layers of a canopy are drawn see-through, one solid layer behind
@@ -446,11 +512,26 @@ restart).
 
 ## How it hooks the game
 
-`better112.core` is a small coremod with no Mixin dependency. Every patch adds a call at the
-head of a method or swaps one value, never replaces code, so it coexists with Mixin mods
-that target the same methods. A patch that does not find what it expects is skipped, and
-the options that need it are greyed out with the reason. Texture animation culling stands
-down when OptiFine or a CensoredASM-family mod already does it.
+`better112.core` is a small coremod with no Mixin dependency. A patch adds a call at the
+head of a method, swaps one value or one call for an equivalent, or answers at the head of a
+method with the same result the method would give (the ray trace, the inventory slot lookup,
+Underground Biomes' ore checks), leaving the original code in place behind it. None rewrites
+a method's body, so they coexist with Mixin mods that target the same methods. A patch that
+does not find what it expects is skipped, and the options that need it are greyed out with
+the reason; `config/better112/disabled_patches.txt` switches any one off by name. Texture
+animation culling stands down when OptiFine or a CensoredASM-family mod already does it.
+TickCentral keeps its class checker away from all patchers, so that one is defined from
+TickCentral's own jar as the game starts, with one value changed, before anything loads it
+(`tickcentral_sniffer`). Forge's own transformers cannot be patched either, so four of them
+are put behind wrappers in the class loader's list (`forge_terminal`, `forge_subscriber`,
+`forge_subscription`, `forge_side`); each wrapper's class name holds the name of the one it
+stands for, so Mixin and TickCentral treat it the same way, and
+`-Dbetter112.checkFastPath=true` runs every class through the original too and logs any
+difference. Most patches are for the game window only; the ones for block
+collisions, ray traces, the inventory, biome and chunk lookups, the mods' world generation,
+Thaumcraft's aspects, the stats list, the data fixers, FermiumASM, Forge's transformers and
+TickCentral also apply on a dedicated server, which
+logs the applied list at start ("Patches applied: ...").
 
 ## Building
 

@@ -392,10 +392,23 @@ public abstract class Density {
      * what gives modern terrain its smooth shapes.
      */
     public static final class Interpolated extends Density {
+        /** Corner columns kept from chunks made before; neighbours share their edge columns. A power of two. */
+        private static final int KEPT = 1024;
+
         final Density input;
         final Grid grid;
         private double[] corners;
         private boolean ready;
+
+        private final int[] keptX = new int[KEPT], keptZ = new int[KEPT];
+        private final double[][] kept = new double[KEPT][];
+        private int keptY0 = Integer.MIN_VALUE, keptNy = -1, keptHeight = -1;
+
+        /** The column of blocks last asked about, blended across x at both z edges of its cells, per cell corner height. */
+        private int columnX = Integer.MIN_VALUE, columnZ = Integer.MIN_VALUE;
+        private boolean columnReady;
+        private double[] lineZ0, lineZ1;
+        private double columnTz;
 
         Interpolated(Density input, Grid grid) {
             this.input = input;
@@ -407,21 +420,46 @@ public abstract class Density {
             if (corners == null || corners.length != g.nx * g.ny * g.nz) {
                 corners = new double[g.nx * g.ny * g.nz];
             }
+            if (keptY0 != g.y0 || keptNy != g.ny || keptHeight != g.cellHeight) {
+                java.util.Arrays.fill(kept, null);
+                keptY0 = g.y0;
+                keptNy = g.ny;
+                keptHeight = g.cellHeight;
+            }
+            int ny = g.ny;
             int i = 0;
             for (int ix = 0; ix < g.nx; ix++) {
                 int x = g.x0 + ix * g.cellWidth;
                 for (int iz = 0; iz < g.nz; iz++) {
                     int z = g.z0 + iz * g.cellWidth;
-                    for (int iy = 0; iy < g.ny; iy++) {
+                    // A column's values depend only on where it is, so a neighbour's copy is the same numbers.
+                    int h = x * 0x9E3779B1 + z * 0x85EBCA6B;
+                    int slot = (h ^ (h >>> 15)) & (KEPT - 1);
+                    double[] column = kept[slot];
+                    if (column != null && keptX[slot] == x && keptZ[slot] == z) {
+                        System.arraycopy(column, 0, corners, i, ny);
+                        i += ny;
+                        continue;
+                    }
+                    int first = i;
+                    for (int iy = 0; iy < ny; iy++) {
                         corners[i++] = input.at(x, g.y0 + iy * g.cellHeight, z);
                     }
+                    if (column == null) {
+                        column = kept[slot] = new double[ny];
+                    }
+                    System.arraycopy(corners, first, column, 0, ny);
+                    keptX[slot] = x;
+                    keptZ[slot] = z;
                 }
             }
             ready = true;
+            columnReady = false;
         }
 
         void clear() {
             ready = false;
+            columnReady = false;
         }
 
         @Override
@@ -431,8 +469,54 @@ public abstract class Density {
                 return input.at(x, y, z);
             }
             int dx = x - g.x0, dy = y - g.y0, dz = z - g.z0;
+            if (dx < 0 || dy < 0 || dz < 0) {
+                return input.at(x, y, z);
+            }
+            if (g.widthShift < 0 || g.heightShift < 0) {
+                return atAnySize(x, y, z, dx, dy, dz);
+            }
+            // Cells of 4 and 8 blocks: shifts and masks give the same cell and the same exact fractions as dividing.
+            // The blend across x depends only on the column, so it is done once per column for every cell height;
+            // each block then needs the blend across y and z only. The sums are the same, in the same order.
+            if (!columnReady || x != columnX || z != columnZ) {
+                int ix = dx >> g.widthShift, iz = dz >> g.widthShift;
+                if (ix >= g.nx - 1 || iz >= g.nz - 1) {
+                    return input.at(x, y, z);
+                }
+                double tx = (dx & (g.cellWidth - 1)) * g.inverseWidth;
+                int ny = g.ny;
+                if (lineZ0 == null || lineZ0.length != ny) {
+                    lineZ0 = new double[ny];
+                    lineZ1 = new double[ny];
+                }
+                int base = (ix * g.nz + iz) * ny, nextX = g.nz * ny, nextZ = ny;
+                double[] c = corners;
+                for (int iy = 0; iy < ny; iy++) {
+                    double c000 = c[base + iy], c100 = c[base + nextX + iy];
+                    double c001 = c[base + nextZ + iy], c101 = c[base + nextX + nextZ + iy];
+                    lineZ0[iy] = c000 + tx * (c100 - c000);
+                    lineZ1[iy] = c001 + tx * (c101 - c001);
+                }
+                columnTz = (dz & (g.cellWidth - 1)) * g.inverseWidth;
+                columnX = x;
+                columnZ = z;
+                columnReady = true;
+            }
+            int iy = dy >> g.heightShift;
+            if (iy >= g.ny - 1) {
+                return input.at(x, y, z);
+            }
+            double ty = (dy & (g.cellHeight - 1)) * g.inverseHeight;
+            double x00 = lineZ0[iy], x10 = lineZ0[iy + 1];
+            double x01 = lineZ1[iy], x11 = lineZ1[iy + 1];
+            double y0 = x00 + ty * (x10 - x00), y1 = x01 + ty * (x11 - x01);
+            return y0 + columnTz * (y1 - y0);
+        }
+
+        private double atAnySize(int x, int y, int z, int dx, int dy, int dz) {
+            Grid g = grid;
             int ix = dx / g.cellWidth, iy = dy / g.cellHeight, iz = dz / g.cellWidth;
-            if (dx < 0 || dy < 0 || dz < 0 || ix >= g.nx - 1 || iy >= g.ny - 1 || iz >= g.nz - 1) {
+            if (ix >= g.nx - 1 || iy >= g.ny - 1 || iz >= g.nz - 1) {
                 return input.at(x, y, z);
             }
             double tx = (dx - ix * g.cellWidth) / (double) g.cellWidth;
@@ -457,5 +541,16 @@ public abstract class Density {
         public int cellWidth = 4, cellHeight = 8;
         int x0, y0, z0, nx, ny, nz;
         boolean filling;
+        /** log2 of the cell sizes when they are powers of two (they are in every vanilla preset), else -1. */
+        int widthShift = -1, heightShift = -1;
+        double inverseWidth, inverseHeight;
+
+        /** Call after setting the cell sizes. */
+        void sizesSet() {
+            widthShift = Integer.bitCount(cellWidth) == 1 ? Integer.numberOfTrailingZeros(cellWidth) : -1;
+            heightShift = Integer.bitCount(cellHeight) == 1 ? Integer.numberOfTrailingZeros(cellHeight) : -1;
+            inverseWidth = 1.0D / cellWidth;
+            inverseHeight = 1.0D / cellHeight;
+        }
     }
 }

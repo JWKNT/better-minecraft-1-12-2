@@ -111,15 +111,30 @@ public final class ModernBiomeProvider extends BiomeProvider {
         }
         for (int dz = 0; dz < length; dz++) {
             for (int dx = 0; dx < width; dx++) {
-                int bx = x + dx, bz = z + dz;
-                // Biomes are decided per 4x4 blocks; a little scatter keeps borders from being stair steps.
-                long h = bx * 3129871L ^ bz * 116129781L ^ seed;
-                h = h * h * 42317861L + h * 11L;
-                int jx = (int) ((h >> 16) & 3) * 2 - 3, jz = (int) ((h >> 20) & 3) * 2 - 3;
-                listToReuse[dx + dz * width] = quart((bx * 2 + jx) >> 3, (bz * 2 + jz) >> 3);
+                listToReuse[dx + dz * width] = blockBiome(x + dx, z + dz);
             }
         }
         return listToReuse;
+    }
+
+    /** The biome of one block column. Biomes are decided per 4x4 blocks; a little scatter keeps borders from being stair steps. */
+    private Biome blockBiome(int bx, int bz) {
+        long h = bx * 3129871L ^ bz * 116129781L ^ seed;
+        h = h * h * 42317861L + h * 11L;
+        int jx = (int) ((h >> 16) & 3) * 2 - 3, jz = (int) ((h >> 20) & 3) * 2 - 3;
+        return quart((bx * 2 + jx) >> 3, (bz * 2 + jz) >> 3);
+    }
+
+    /**
+     * The biome at a block of a chunk that is not loaded (the game asks this while making chunks, and Better Caves
+     * for every block a ravine digs). The game's own answer goes through its biome cache, which fills a 16x16 table
+     * from {@link #getBiomes} and reads one entry, and in Divine Journey 2 also through NoiseThreader's wrapper (two
+     * boxed numbers and an array per call); this is the same entry, worked out directly.
+     */
+    @Override
+    public Biome getBiome(BlockPos pos, Biome defaultBiome) {
+        Biome biome = blockBiome(pos.getX(), pos.getZ());
+        return biome == null ? defaultBiome : biome;
     }
 
     @Override

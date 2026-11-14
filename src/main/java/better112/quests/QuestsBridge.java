@@ -42,6 +42,11 @@ public final class QuestsBridge {
         Minecraft.getMinecraft().displayGuiScreen(new GuiQuestLines(parent));
     }
 
+    /** True for the quest screen: it paints the whole window over before anything else, so the world behind is never seen. */
+    public static boolean coversWorld(GuiScreen screen) {
+        return screen instanceof GuiFtbQuests;
+    }
+
     /** Self-test hook. */
     public static GuiScreen create() {
         return new GuiFtbQuests(null);

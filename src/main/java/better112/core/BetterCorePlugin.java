@@ -15,6 +15,14 @@ import net.minecraftforge.fml.relauncher.IFMLLoadingPlugin;
 @IFMLLoadingPlugin.TransformerExclusions({"better112.core."})
 public class BetterCorePlugin implements IFMLLoadingPlugin {
 
+    public BetterCorePlugin() {
+        // Before any class patcher runs: TickCentral's class check is put in place now or never (SnifferFix).
+        if (PatchState.gameDir() == null && net.minecraft.launchwrapper.Launch.minecraftHome != null) {
+            PatchState.init(net.minecraft.launchwrapper.Launch.minecraftHome);
+        }
+        SnifferFix.apply();
+    }
+
     @Override
     public String[] getASMTransformerClass() {
         return new String[] {"better112.core.BetterTransformer"};
@@ -34,9 +42,12 @@ public class BetterCorePlugin implements IFMLLoadingPlugin {
     public void injectData(Map<String, Object> data) {
         Object location = data.get("mcLocation");
         if (location instanceof File) {
-            PatchState.init((File) location);
+            if (PatchState.gameDir() == null) {
+                PatchState.init((File) location);
+            }
             better112.config.BetterConfig.load(new File((File) location, "config/better112.cfg"));
         }
+        SnifferFix.apply();
     }
 
     @Override

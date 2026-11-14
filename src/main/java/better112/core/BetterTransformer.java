@@ -21,8 +21,10 @@ import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.IntInsnNode;
 import org.objectweb.asm.tree.JumpInsnNode;
 import org.objectweb.asm.tree.LabelNode;
+import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
 /**
@@ -41,13 +43,497 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
     private static final Map<String, ClassPatch> PATCHES = new HashMap<String, ClassPatch>();
 
     static {
+        ForgeFastPath.touch();
+        registerCommonPatches();
         if (FMLLaunchHandler.side() == Side.CLIENT) {
             registerPatches();
         }
     }
 
+    /** Adds a patch for a class; a class patched both for both sides and for the client gets both. */
+    private static void addPatch(String className, final ClassPatch patch) {
+        final ClassPatch before = PATCHES.get(className);
+        if (before == null) {
+            PATCHES.put(className, patch);
+            return;
+        }
+        PATCHES.put(className, new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                boolean changed = before.apply(c);
+                changed |= patch.apply(c);
+                return changed;
+            }
+        });
+    }
+
+    /** Patches for code that runs on both sides: the server thread of a dedicated server or of single player. */
+    private static void registerCommonPatches() {
+        addPatch("net.minecraft.world.World", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Ray tracing through blocks without a new point object per block crossed or a new "missed" result
+                // per block passed (perf.RayTrace): Mekanism traces 40 blocks every frame, mobs trace to see.
+                MethodNode m = find(c, "(Lnet/minecraft/util/math/Vec3d;Lnet/minecraft/util/math/Vec3d;ZZZ)Lnet/minecraft/util/math/RayTraceResult;",
+                        "rayTraceBlocks", "func_147447_a");
+                if (m == null || !PatchState.enabled("ray_trace")) {
+                    PatchState.failed("ray_trace");
+                    return false;
+                }
+                InsnList tail = new InsnList();
+                LabelNode resume = resumeLabel(m, tail);
+                InsnList code = new InsnList();
+                code.add(new MethodInsnNode(INVOKESTATIC, "better112/perf/RayTrace", "enabled", "()Z", false));
+                code.add(new JumpInsnNode(IFEQ, resume));
+                code.add(new VarInsnNode(ALOAD, 0));
+                code.add(new VarInsnNode(ALOAD, 1));
+                code.add(new VarInsnNode(ALOAD, 2));
+                code.add(new VarInsnNode(ILOAD, 3));
+                code.add(new VarInsnNode(ILOAD, 4));
+                code.add(new VarInsnNode(ILOAD, 5));
+                code.add(new MethodInsnNode(INVOKESTATIC, "better112/perf/RayTrace", "trace", "(Lnet/minecraft/world/World;"
+                        + "Lnet/minecraft/util/math/Vec3d;Lnet/minecraft/util/math/Vec3d;ZZZ)Lnet/minecraft/util/math/RayTraceResult;", false));
+                code.add(new InsnNode(ARETURN));
+                code.add(tail);
+                m.instructions.insert(code);
+                PatchState.applied("ray_trace");
+                return true;
+            }
+        });
+
+        addPatch("net.minecraft.world.World", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Every block a mob or item looks at goes through getChunk, the chunk provider and its map, mostly
+                // for the chunk asked for a moment before. On the server thread the last chunk is kept (perf.ModFixes).
+                String id = "chunk_lookup";
+                MethodNode m = find(c, "(II)Lnet/minecraft/world/chunk/Chunk;", "getChunk", "func_72964_e");
+                if (m == null || !PatchState.enabled(id) || c.interfaces.contains("better112/core/ChunkKeeper")) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                AbstractInsnNode answer = null;
+                int returns = 0;
+                for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+                    if (n.getOpcode() == ARETURN) {
+                        answer = n;
+                        returns++;
+                    }
+                }
+                if (returns != 1) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                String field = "better112_keptChunk";
+                c.fields.add(new FieldNode(ACC_PUBLIC, field, "Ljava/lang/Object;", null, null));
+                c.interfaces.add("better112/core/ChunkKeeper");
+                MethodNode getter = new MethodNode(ACC_PUBLIC, "better112_keptChunk", "()Ljava/lang/Object;", null, null);
+                getter.instructions.add(new VarInsnNode(ALOAD, 0));
+                getter.instructions.add(new FieldInsnNode(GETFIELD, c.name, field, "Ljava/lang/Object;"));
+                getter.instructions.add(new InsnNode(ARETURN));
+                c.methods.add(getter);
+                MethodNode setter = new MethodNode(ACC_PUBLIC, "better112_keepChunk", "(Ljava/lang/Object;)V", null, null);
+                setter.instructions.add(new VarInsnNode(ALOAD, 0));
+                setter.instructions.add(new VarInsnNode(ALOAD, 1));
+                setter.instructions.add(new FieldInsnNode(PUTFIELD, c.name, field, "Ljava/lang/Object;"));
+                setter.instructions.add(new InsnNode(RETURN));
+                c.methods.add(setter);
+
+                // kept = ModFixes.keptChunk(this, x, z); if (kept != null) return kept; ... the old body ... keepChunk(chunk, this)
+                int kept = m.maxLocals;
+                m.maxLocals++;
+                InsnList tail = new InsnList();
+                LabelNode miss = resumeLabel(m, tail);
+                InsnList code = new InsnList();
+                code.add(new VarInsnNode(ALOAD, 0));
+                code.add(new VarInsnNode(ILOAD, 1));
+                code.add(new VarInsnNode(ILOAD, 2));
+                code.add(new MethodInsnNode(INVOKESTATIC, "better112/perf/ModFixes", "keptChunk",
+                        "(Lnet/minecraft/world/World;II)Lnet/minecraft/world/chunk/Chunk;", false));
+                code.add(new VarInsnNode(ASTORE, kept));
+                code.add(new VarInsnNode(ALOAD, kept));
+                code.add(new JumpInsnNode(IFNULL, miss));
+                code.add(new VarInsnNode(ALOAD, kept));
+                code.add(new InsnNode(ARETURN));
+                code.add(tail);
+                m.instructions.insert(code);
+                InsnList store = new InsnList();
+                store.add(new InsnNode(DUP));
+                store.add(new VarInsnNode(ALOAD, 0));
+                store.add(new MethodInsnNode(INVOKESTATIC, "better112/perf/ModFixes", "keepChunk",
+                        "(Lnet/minecraft/world/chunk/Chunk;Lnet/minecraft/world/World;)V", false));
+                m.instructions.insertBefore(answer, store);
+                PatchState.applied(id);
+                return true;
+            }
+        });
+
+        addPatch("net.minecraft.block.Block", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Moving things ask each block around them for its collision box, placed at the block: a new box per
+                // block, most of them thrown away at once. The largest single source of garbage on the server thread.
+                MethodNode m = find(c, "(Lnet/minecraft/util/math/BlockPos;Lnet/minecraft/util/math/AxisAlignedBB;Ljava/util/List;"
+                        + "Lnet/minecraft/util/math/AxisAlignedBB;)V", "addCollisionBoxToList", "func_185492_a");
+                return cancelIfIn("collision_boxes", m, "better112/perf/Collisions", "add", "(Lnet/minecraft/util/math/BlockPos;"
+                        + "Lnet/minecraft/util/math/AxisAlignedBB;Ljava/util/List;Lnet/minecraft/util/math/AxisAlignedBB;)Z", 0, 1, 2, 3);
+            }
+        });
+
+        PATCHES.put("org.embeddedt.vintagefix.chunk.VintageChunkMap", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // VintageFix puts its own table of loaded chunks in place of the game's, with the same fixed start of
+                // 8,192 chunks (16,384 slots) that never shrinks, and walks all of it twice a frame for entities.
+                return replaceIntConstant("chunk_table_vintagefix", find(c, "()V", "<init>"), 8192, 512);
+            }
+        });
+
+        PATCHES.put("net.minecraft.entity.player.InventoryPlayer", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // getStackInSlot walks the three inventory lists with a new iterator on every call; mods read every
+                // slot of the player's inventory each frame (Botania's HUD) or each tick. Same walk, by index.
+                return patchInventorySlot(find(c, "(I)Lnet/minecraft/item/ItemStack;", "getStackInSlot", "func_70301_a"));
+            }
+        });
+
+        PATCHES.put("exterminatorjeff.undergroundbiomes.world.UBStoneReplacer", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // ...and turns the name of every block (and every column's biome) into text to compare it.
+                return replaceCallIn("ub_names", find(c, null, "replaceStoneInChunk"), INVOKEVIRTUAL, "net/minecraft/util/ResourceLocation",
+                        "toString", "()Ljava/lang/String;", "better112/perf/ModFixes", "locationText", "(Ljava/lang/Object;)Ljava/lang/String;");
+            }
+        });
+
+        PATCHES.put("thaumcraft.common.lib.crafting.ThaumcraftCraftingManager", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Thaumcraft works out an item's aspects from the recipes that make it, walking every recipe in the
+                // game for each item: seconds of each game and server start. It is handed only the recipes that
+                // make that item, in the same order.
+                String id = "thaumcraft_recipes";
+                MethodNode m = find(c, "(Lnet/minecraft/item/ItemStack;Ljava/util/ArrayList;)Lthaumcraft/api/aspects/AspectList;",
+                        "generateTagsFromCraftingRecipes");
+                MethodInsnNode keys = null;
+                int found = 0;
+                if (m != null && (m.access & ACC_STATIC) != 0) {
+                    for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+                        if (n.getOpcode() == INVOKEVIRTUAL && ((MethodInsnNode) n).owner.equals("net/minecraft/util/registry/RegistryNamespaced")
+                                && (((MethodInsnNode) n).name.equals("func_148742_b") || ((MethodInsnNode) n).name.equals("getKeys"))
+                                && ((MethodInsnNode) n).desc.equals("()Ljava/util/Set;")) {
+                            keys = (MethodInsnNode) n;
+                            found++;
+                        }
+                    }
+                }
+                if (found != 1 || !PatchState.enabled(id)) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                m.instructions.insertBefore(keys, new VarInsnNode(ALOAD, 0));
+                m.instructions.set(keys, new MethodInsnNode(INVOKESTATIC, "better112/perf/ModFixes", "thaumcraftRecipeNames",
+                        "(Lnet/minecraft/util/registry/RegistryNamespaced;Lnet/minecraft/item/ItemStack;)Ljava/util/Set;", false));
+                PatchState.applied(id);
+                return true;
+            }
+        });
+
+        PATCHES.put("net.minecraft.stats.StatList", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // On every registry remap (each world load and leave, and server start) Forge's reinit takes every
+                // block and item stat out of the list of all stats one at a time, walking the list for each one.
+                String id = "stat_removal";
+                MethodNode m = find(c, "()V", "reinit");
+                if (m == null || (m.access & ACC_STATIC) == 0 || !PatchState.enabled(id)) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                InsnList code = new InsnList();
+                code.add(new MethodInsnNode(INVOKESTATIC, "better112/perf/ModFixes", "removeStatsAtOnce", "()Z", false));
+                code.add(new InsnNode(POP));
+                m.instructions.insert(code);
+                PatchState.applied(id);
+                return true;
+            }
+        });
+
+        addPatch("net.minecraft.world.chunk.Chunk", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // The height rain and snow fall to, worked out per column by walking down from the top of the chunk with a
+                // new position object per block (perf.ModFixes.precipitationHeight walks with one).
+                String id = "precipitation_height";
+                MethodNode m = find(c, "(Lnet/minecraft/util/math/BlockPos;)Lnet/minecraft/util/math/BlockPos;", "getPrecipitationHeight",
+                        "func_177440_h");
+                FieldNode heights = null;
+                for (FieldNode f : c.fields) {
+                    if (f.desc.equals("[I") && (f.name.equals("field_76638_b") || f.name.equals("precipitationHeightMap"))) {
+                        heights = f;
+                    }
+                }
+                if (m == null || heights == null || (m.access & ACC_STATIC) != 0 || !PatchState.enabled(id)) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                InsnList tail = new InsnList();
+                resumeLabel(m, tail);
+                InsnList code = new InsnList();
+                code.add(new VarInsnNode(ALOAD, 0));
+                code.add(new VarInsnNode(ALOAD, 1));
+                code.add(new VarInsnNode(ALOAD, 0));
+                code.add(new FieldInsnNode(GETFIELD, c.name, heights.name, heights.desc));
+                code.add(new MethodInsnNode(INVOKESTATIC, "better112/perf/ModFixes", "precipitationHeight",
+                        "(Lnet/minecraft/world/chunk/Chunk;Lnet/minecraft/util/math/BlockPos;[I)Lnet/minecraft/util/math/BlockPos;", false));
+                code.add(new InsnNode(ARETURN));
+                code.add(tail);
+                m.instructions.insert(code);
+                PatchState.applied(id);
+                return true;
+            }
+        });
+
+        PATCHES.put("net.minecraft.util.datafix.walkers.Filtered", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // The data fixers check every block entity and entity of each chunk and structure loaded against each
+                // fixer by making a name from its id and comparing it with the fixer's. The comparison is done
+                // without making the name (perf.ModFixes.idIs gives the same answer).
+                String id = "datafix_ids";
+                MethodNode m = find(c, "(Lnet/minecraft/util/datafix/IDataFixer;Lnet/minecraft/nbt/NBTTagCompound;I)Lnet/minecraft/nbt/NBTTagCompound;",
+                        "process", "func_188266_a");
+                String rl = "net/minecraft/util/ResourceLocation";
+                AbstractInsnNode made = null, init = null, equals = null;
+                int news = 0, inits = 0;
+                if (m != null) {
+                    for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+                        if (n.getOpcode() == NEW && ((TypeInsnNode) n).desc.equals(rl)) {
+                            made = n;
+                            news++;
+                        } else if (n.getOpcode() == INVOKESPECIAL && ((MethodInsnNode) n).owner.equals(rl)) {
+                            init = n;
+                            inits++;
+                        }
+                    }
+                }
+                if (news == 1 && inits == 1 && ((MethodInsnNode) init).desc.equals("(Ljava/lang/String;)V")) {
+                    AbstractInsnNode self = init.getNext(), key = self == null ? null : self.getNext();
+                    equals = key == null ? null : key.getNext();
+                    boolean shape = made.getNext() != null && made.getNext().getOpcode() == DUP
+                            && self.getOpcode() == ALOAD && ((VarInsnNode) self).var == 0
+                            && key.getOpcode() == GETFIELD && ((FieldInsnNode) key).desc.equals("L" + rl + ";")
+                            && equals != null && equals.getOpcode() == INVOKEVIRTUAL && ((MethodInsnNode) equals).owner.equals(rl)
+                            && ((MethodInsnNode) equals).name.equals("equals") && ((MethodInsnNode) equals).desc.equals("(Ljava/lang/Object;)Z");
+                    if (!shape) {
+                        equals = null;
+                    }
+                }
+                if (equals == null || !PatchState.enabled(id)) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                m.instructions.remove(made.getNext());
+                m.instructions.remove(made);
+                m.instructions.remove(init);
+                m.instructions.set(equals, new MethodInsnNode(INVOKESTATIC, "better112/perf/ModFixes", "idIs",
+                        "(Ljava/lang/String;Lnet/minecraft/util/ResourceLocation;)Z", false));
+                PatchState.applied(id);
+                return true;
+            }
+        });
+
+        PATCHES.put("mirror.normalasm.common.java.JavaFixes", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // FermiumASM goes through every protection domain of the class loader (one per class loaded) on every
+                // world load, once per dimension, to make equal permission names share one text. The same is done for
+                // the domains made since the last run only (perf.ModFixes.sharePermissionNames).
+                return cancelIfIn("fermium_permissions", find(c, "()V", "run"), "better112/perf/ModFixes", "sharePermissionNames", "()Z");
+            }
+        });
+
+        addPatch("net.minecraft.world.biome.Biome", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                MethodNode m = find(c, "(I)Lnet/minecraft/world/biome/Biome;", "getBiome", "func_185357_a");
+                if (m == null || !PatchState.enabled("biome_ids")) {
+                    PatchState.failed("biome_ids");
+                    return false;
+                }
+                InsnList tail = new InsnList();
+                resumeLabel(m, tail);
+                InsnList code = new InsnList();
+                code.add(new VarInsnNode(ILOAD, 0));
+                code.add(new MethodInsnNode(INVOKESTATIC, "better112/perf/ModFixes", "biomeById", "(I)Lnet/minecraft/world/biome/Biome;", false));
+                code.add(new InsnNode(ARETURN));
+                code.add(tail);
+                m.instructions.insert(code);
+                PatchState.applied("biome_ids");
+                return true;
+            }
+        });
+
+        PATCHES.put("hellfirepvp.astralsorcery.common.starlight.WorldNetworkHandler", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Astral Sorcery looks up the 27 chunk sections around every changed block in its starlight network
+                // (27 new chunk positions and a list per block, for every block world generation places), though
+                // almost everywhere no chunk nearby has any network: then it stops at once.
+                String id = "astral_block_change";
+                MethodNode m = find(c, "(Lnet/minecraft/util/math/BlockPos;)V", "informBlockChange");
+                FieldNode buffer = null;
+                for (FieldNode f : c.fields) {
+                    if (f.desc.endsWith("/LightNetworkBuffer;")) {
+                        buffer = f;
+                    }
+                }
+                if (m == null || buffer == null || !PatchState.enabled(id) || (m.access & ACC_STATIC) != 0) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                InsnList tail = new InsnList();
+                LabelNode resume = resumeLabel(m, tail);
+                InsnList code = new InsnList();
+                code.add(new VarInsnNode(ALOAD, 0));
+                code.add(new FieldInsnNode(GETFIELD, c.name, buffer.name, buffer.desc));
+                code.add(new VarInsnNode(ALOAD, 1));
+                code.add(new MethodInsnNode(INVOKESTATIC, "better112/perf/ModFixes", "astralNothingNear",
+                        "(Ljava/lang/Object;Lnet/minecraft/util/math/BlockPos;)Z", false));
+                code.add(new JumpInsnNode(IFEQ, resume));
+                code.add(new InsnNode(RETURN));
+                code.add(tail);
+                m.instructions.insert(code);
+                PatchState.applied(id);
+                return true;
+            }
+        });
+
+        PATCHES.put("crazypants.enderio.base.handler.ServerTickHandler", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // EnderIO copies its table of tick listeners into a new hashed set twice every server tick (so that
+                // listeners may come and go while it walks them); in a quiet base that copy was a third of the server
+                // thread's work. The copy is kept until EnderIO adds, removes or clears a listener.
+                String id = "enderio_tick_listeners";
+                boolean changed = replaceCallIn(id, find(c, null, "onServerTick"), INVOKESTATIC, "com/google/common/collect/ImmutableSet",
+                        "copyOf", "(Ljava/util/Collection;)Lcom/google/common/collect/ImmutableSet;", "better112/perf/ModFixes", "enderioListeners",
+                        "(Ljava/util/Collection;)Lcom/google/common/collect/ImmutableSet;");
+                if (!changed) {
+                    return false;
+                }
+                int marked = 0;
+                for (MethodNode m : c.methods) {
+                    boolean touches = false;
+                    for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+                        if (n.getOpcode() == INVOKEVIRTUAL && ((MethodInsnNode) n).owner.equals("java/util/IdentityHashMap")
+                                && n.getPrevious() != null) {
+                            String name = ((MethodInsnNode) n).name;
+                            if (name.equals("put") || name.equals("remove") || name.equals("clear")) {
+                                touches = true;
+                            }
+                        }
+                    }
+                    if (touches && !m.name.startsWith("lambda$") && !m.name.equals("<clinit>")) {
+                        m.instructions.insert(new MethodInsnNode(INVOKESTATIC, "better112/perf/ModFixes", "enderioListenersChanged", "()V", false));
+                        marked++;
+                    }
+                }
+                if (marked == 0) {
+                    PatchState.failed(id);
+                }
+                return true;
+            }
+        });
+
+        PATCHES.put("net.minecraft.util.LowerStringMap", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Mob attributes are kept in a map that lower-cases every name it is asked about ("generic.maxHealth"
+                // becomes a new text each time), several times per mob per tick. The lower-case text of a name is kept.
+                boolean changed = false;
+                for (MethodNode m : c.methods) {
+                    boolean bridge = (m.access & (ACC_BRIDGE | ACC_SYNTHETIC)) != 0;
+                    if (!bridge && (m.name.equals("get") || m.name.equals("containsKey") || m.name.equals("put") || m.name.equals("remove"))) {
+                        changed |= replaceCallIn("attribute_names", m, INVOKEVIRTUAL, "java/lang/String", "toLowerCase",
+                                "(Ljava/util/Locale;)Ljava/lang/String;", "better112/perf/ModFixes", "lowerCase",
+                                "(Ljava/lang/String;Ljava/util/Locale;)Ljava/lang/String;");
+                    }
+                }
+                return changed;
+            }
+        });
+
+        PATCHES.put("net.minecraft.pathfinding.WalkNodeProcessor", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Mobs finding a path make a new position for every block they look at; the method only reads it.
+                String id = "path_positions";
+                MethodNode m = find(c, "(Lnet/minecraft/world/IBlockAccess;III)Lnet/minecraft/pathfinding/PathNodeType;",
+                        "getPathNodeTypeRaw", "func_189553_b");
+                if (m == null || !PatchState.enabled(id)) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                AbstractInsnNode n = m.instructions.getFirst();
+                while (n != null && n.getOpcode() < 0) {
+                    n = n.getNext();
+                }
+                AbstractInsnNode dup = n == null ? null : n.getNext();
+                AbstractInsnNode a = dup == null ? null : dup.getNext(), b = a == null ? null : a.getNext(), d = b == null ? null : b.getNext();
+                AbstractInsnNode init = d == null ? null : d.getNext();
+                if (n == null || n.getOpcode() != NEW || !((TypeInsnNode) n).desc.equals("net/minecraft/util/math/BlockPos")
+                        || dup.getOpcode() != DUP || a.getOpcode() != ILOAD || b.getOpcode() != ILOAD || d.getOpcode() != ILOAD
+                        || init.getOpcode() != INVOKESPECIAL || !((MethodInsnNode) init).desc.equals("(III)V")) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                m.instructions.remove(n);
+                m.instructions.remove(dup);
+                m.instructions.set(init, new MethodInsnNode(INVOKESTATIC, "better112/perf/ModFixes", "pathPos",
+                        "(III)Lnet/minecraft/util/math/BlockPos;", false));
+                PatchState.applied(id);
+                return true;
+            }
+        });
+
+        ClassPatch alfheimNeighbours = new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Alfheim reads the light of each neighbour of blocks that take their light from their neighbours
+                // (slabs, stairs, water...) through a new position object per neighbour: on chunk-building threads
+                // and for every particle drawn. The light read only reads the position, so one is reused.
+                MethodNode m = find(c, null, "alfheim$getLightFor");
+                if (m == null) {
+                    return false;
+                }
+                return replaceCallIn("alfheim_neighbours", m, INVOKEVIRTUAL, "net/minecraft/util/math/BlockPos", "func_177972_a|offset",
+                        "(Lnet/minecraft/util/EnumFacing;)Lnet/minecraft/util/math/BlockPos;", "better112/perf/ModFixes", "neighbour",
+                        "(Lnet/minecraft/util/math/BlockPos;Lnet/minecraft/util/EnumFacing;)Lnet/minecraft/util/math/BlockPos;");
+            }
+        };
+        addPatch("dev.redstudio.alfheim.mixin.BlockMixin", alfheimNeighbours);
+        addPatch("net.minecraft.block.Block", alfheimNeighbours);
+
+        PATCHES.put("exterminatorjeff.undergroundbiomes.intermod.OresRegistry", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Underground Biomes asks "is this an ore I re-texture in this stone?" for every block of every new
+                // chunk, by building a text key and looking it up in a map of texts: about 7% of the server thread
+                // while players explore. The answer for a block state and a stone never changes, so it is kept;
+                // the same goes for which of its ore blocks replaces an ore.
+                boolean changed = memoizeUbOre(find(c, "(Lexterminatorjeff/undergroundbiomes/common/block/UBStone;I"
+                        + "Lnet/minecraft/block/state/IBlockState;)Lnet/minecraft/block/state/IBlockState;", "getUBifiedOre"));
+                changed |= memoizeUbified(find(c, "(Lnet/minecraft/block/Block;Lnet/minecraft/block/state/IBlockState;)Z", "isUBified"));
+                return changed;
+            }
+        });
+    }
+
     @Override
     public byte[] transform(String name, String transformedName, byte[] basicClass) {
+        ForgeFastPath.install();
         if (basicClass == null) {
             return null;
         }
@@ -75,11 +561,84 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
     // ------------------------------------------------------------------------------------
 
     private static void registerPatches() {
-        PATCHES.put("net.minecraftforge.client.ForgeHooksClient", new ClassPatch() {
+        PATCHES.put("net.minecraft.client.renderer.texture.TextureUtil", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Loading a texture from a picture file makes a 16 MB buffer whatever the picture's size; the buffer is
+                // made only as large as the upload uses (perf.RenderArrays.uploadBufferSize).
+                String id = "texture_upload_buffer";
+                MethodNode m = find(c, "(Ljava/awt/image/BufferedImage;IIZZ)V", "uploadTextureImageSubImpl", "func_110993_a");
+                AbstractInsnNode multiply = null;
+                int arrays = 0;
+                if (m != null) {
+                    for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+                        if (n.getOpcode() == NEWARRAY && ((IntInsnNode) n).operand == T_INT) {
+                            arrays++;
+                            AbstractInsnNode before = n.getPrevious();
+                            multiply = before != null && before.getOpcode() == IMUL ? before : null;
+                        }
+                    }
+                }
+                if (arrays != 1 || multiply == null || (m.access & ACC_STATIC) == 0 || !PatchState.enabled(id)) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                m.instructions.insertBefore(multiply, new VarInsnNode(ALOAD, 0));
+                m.instructions.set(multiply, new MethodInsnNode(INVOKESTATIC, "better112/perf/RenderArrays", "uploadBufferSize",
+                        "(IILjava/awt/image/BufferedImage;)I", false));
+                PatchState.applied(id);
+                return true;
+            }
+        });
+
+        addPatch("net.minecraftforge.client.ForgeHooksClient", new ClassPatch() {
             @Override
             public boolean apply(ClassNode c) {
                 MethodNode m = find(c, "(Lnet/minecraft/world/World;Lnet/minecraft/util/math/BlockPos;)I", "getSkyBlendColour");
                 return returnIntIf("sky_color", m, "hasSkyColor", "skyColor");
+            }
+        });
+
+        addPatch("net.minecraftforge.client.ForgeHooksClient", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Every item drawn (slots, hotbar, JEI's list, every frame) goes through renderLitItem, which gathers the
+                // model's quads into a new list and each run of equally lit quads into another; both are kept and
+                // emptied instead (perf.RenderArrays.litList).
+                String id = "lit_item_lists";
+                MethodNode m = find(c, "(Lnet/minecraft/client/renderer/RenderItem;Lnet/minecraft/client/renderer/block/model/IBakedModel;"
+                        + "ILnet/minecraft/item/ItemStack;)V", "renderLitItem");
+                java.util.List<AbstractInsnNode> made = new java.util.ArrayList<AbstractInsnNode>();
+                java.util.List<AbstractInsnNode> returns = new java.util.ArrayList<AbstractInsnNode>();
+                boolean shape = m != null;
+                if (m != null) {
+                    for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+                        if (n.getOpcode() == NEW && ((TypeInsnNode) n).desc.equals("java/util/ArrayList")) {
+                            AbstractInsnNode dup = n.getNext(), init = dup == null ? null : dup.getNext();
+                            shape &= dup != null && dup.getOpcode() == DUP && init != null && init.getOpcode() == INVOKESPECIAL
+                                    && ((MethodInsnNode) init).owner.equals("java/util/ArrayList") && ((MethodInsnNode) init).desc.equals("()V");
+                            made.add(n);
+                        } else if (n.getOpcode() == RETURN) {
+                            returns.add(n);
+                        }
+                    }
+                }
+                if (!shape || made.size() != 2 || returns.isEmpty() || !PatchState.enabled(id)) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                for (int i = 0; i < 2; i++) {
+                    AbstractInsnNode n = made.get(i), dup = n.getNext(), init = dup.getNext();
+                    m.instructions.insertBefore(n, new InsnNode(i == 0 ? ICONST_0 : ICONST_1));
+                    m.instructions.remove(n);
+                    m.instructions.remove(dup);
+                    m.instructions.set(init, new MethodInsnNode(INVOKESTATIC, "better112/perf/RenderArrays", "litList", "(I)Ljava/util/ArrayList;", false));
+                }
+                for (AbstractInsnNode r : returns) {
+                    m.instructions.insertBefore(r, new MethodInsnNode(INVOKESTATIC, "better112/perf/RenderArrays", "litDone", "()V", false));
+                }
+                PatchState.applied(id);
+                return true;
             }
         });
 
@@ -105,7 +664,30 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
             public boolean apply(ClassNode c) {
                 MethodNode m = find(c, "(Lnet/minecraft/client/renderer/BufferBuilder;Lnet/minecraft/entity/Entity;FFFFFF)V",
                         "renderParticle", "func_180434_a");
-                return cancelIf("particle_render", m, "cullParticle", "(Lnet/minecraft/client/particle/Particle;)Z", 0);
+                // Drawn without four new corner objects per particle per frame; inserted first so that the culling
+                // check below ends up ahead of it.
+                boolean changed = cancelIfIn("particle_corners", m, "net/minecraft/client/particle/Better112ParticleDraw", "draw",
+                        "(Lnet/minecraft/client/particle/Particle;Lnet/minecraft/client/renderer/BufferBuilder;"
+                                + "Lnet/minecraft/entity/Entity;FFFFFF)Z", 0, 1, 2, 3, 4, 5, 6, 7, 8);
+                changed |= cancelIf("particle_render", m, "cullParticle", "(Lnet/minecraft/client/particle/Particle;)Z", 0);
+                changed |= patchParticleStill(find(c, "(DDD)V", "move", "func_187110_a"));
+                MethodNode light = find(c, "(F)I", "getBrightnessForRender", "func_189214_a");
+                if (light != null && PatchState.enabled("particle_light")) {
+                    InsnList tail = new InsnList();
+                    resumeLabel(light, tail);
+                    InsnList code = new InsnList();
+                    code.add(new VarInsnNode(ALOAD, 0));
+                    code.add(new MethodInsnNode(INVOKESTATIC, "net/minecraft/client/particle/Better112ParticleDraw", "light",
+                            "(Lnet/minecraft/client/particle/Particle;)I", false));
+                    code.add(new InsnNode(IRETURN));
+                    code.add(tail);
+                    light.instructions.insert(code);
+                    PatchState.applied("particle_light");
+                    changed = true;
+                } else {
+                    PatchState.failed("particle_light");
+                }
+                return changed;
             }
         });
 
@@ -135,6 +717,8 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
                 changed |= cancelIf("rain_splash", find(c, "()V", "addRainParticles", "func_78484_h"), "noRainSplash", "()Z");
                 changed |= replaceFieldRead("weather_quality", rain, "net/minecraft/client/settings/GameSettings",
                         "fancyWeather", "(Lnet/minecraft/client/settings/GameSettings;)Z", "fancyGraphics", "field_74347_j");
+                // While the quest book is open it paints over the whole window: the world behind it is not drawn.
+                changed |= cancelIf("covered_world", find(c, "(FJ)V", "renderWorld", "func_78471_a"), "worldCovered", "()Z");
                 changed |= patchDamageTilt(find(c, "(F)V", "hurtCameraEffect", "func_78482_e"));
                 changed |= patchDistortion(find(c, "(FI)V", "setupCameraTransform", "func_78479_a"));
                 // The interface is drawn from here on: the in-game overlay, then whatever screen is open.
@@ -148,6 +732,13 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
             @Override
             public boolean apply(ClassNode c) {
                 boolean changed = cancelIf("sky", find(c, "(FI)V", "renderSky", "func_174976_a"), "noSky", "()Z");
+                // VintageFix's entity lister, when its mixin is already merged in by the time this patch runs.
+                MethodNode lister = find(c, "()Ljava/util/Iterator;", "getLoadedEntityIterator");
+                if (lister != null) {
+                    changed |= replaceCallIn("entity_lists", lister, INVOKEVIRTUAL, "net/minecraft/world/chunk/Chunk",
+                            "func_177429_s|getEntityLists", "()[Lnet/minecraft/util/ClassInheritanceMultiMap;", HOOKS, "entityListsToDraw",
+                            "(Lnet/minecraft/world/chunk/Chunk;)[Lnet/minecraft/util/ClassInheritanceMultiMap;");
+                }
                 changed |= callAtHead("camera",
                         find(c, "(Lnet/minecraft/entity/Entity;Lnet/minecraft/client/renderer/culling/ICamera;F)V",
                                 "renderEntities", "func_180446_a"),
@@ -156,7 +747,7 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
             }
         });
 
-        PATCHES.put("net.minecraft.world.World", new ClassPatch() {
+        addPatch("net.minecraft.world.World", new ClassPatch() {
             @Override
             public boolean apply(ClassNode c) {
                 boolean changed = cancelIf("stars", find(c, "(F)F", "getStarBrightness", "func_72880_h"), "noStars", "()Z");
@@ -265,9 +856,45 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
             public boolean apply(ClassNode c) {
                 // Hwyla holds its patterns compiled, but hands their text to String.replaceAll, which compiles them
                 // again on every call: several times each tick while a tooltip is up.
-                return replaceCall("waila_patterns", find(c, "(Ljava/lang/String;)Ljava/lang/String;", "stripWailaSymbols"), INVOKEVIRTUAL,
+                boolean changed = replaceCall("waila_patterns", find(c, "(Ljava/lang/String;)Ljava/lang/String;", "stripWailaSymbols"), INVOKEVIRTUAL,
                         "java/lang/String", "replaceAll", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", "replaceAll",
                         "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+                // Its tooltip width splits each line with String.split, which also compiles the expression every frame.
+                changed |= replaceCall("waila_split", find(c, null, "getDisplayWidth"), INVOKEVIRTUAL, "java/lang/String", "split",
+                        "(Ljava/lang/String;)[Ljava/lang/String;", "split", "(Ljava/lang/String;Ljava/lang/String;)[Ljava/lang/String;");
+                return changed;
+            }
+        });
+
+        PATCHES.put("mezz.jei.suffixtree.Node", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // JEI's search tree asks each node whether it already holds an ingredient by walking all of the
+                // node's list: seconds of the game's start go to that while JEI builds its search.
+                String id = "jei_search_tree";
+                MethodNode m = find(c, "(I)Z", "contains");
+                FieldNode data = null;
+                for (FieldNode f : c.fields) {
+                    if (f.name.equals("data") && f.desc.equals("Lit/unimi/dsi/fastutil/ints/IntList;")) {
+                        data = f;
+                    }
+                }
+                if (m == null || data == null || !PatchState.enabled(id) || (m.access & ACC_STATIC) != 0) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                InsnList tail = new InsnList();
+                resumeLabel(m, tail);
+                InsnList code = new InsnList();
+                code.add(new VarInsnNode(ALOAD, 0));
+                code.add(new FieldInsnNode(GETFIELD, c.name, data.name, data.desc));
+                code.add(new VarInsnNode(ILOAD, 1));
+                code.add(new MethodInsnNode(INVOKESTATIC, "better112/perf/ModFixes", "jeiNodeHas", "(Lit/unimi/dsi/fastutil/ints/IntList;I)Z", false));
+                code.add(new InsnNode(IRETURN));
+                code.add(tail);
+                m.instructions.insert(code);
+                PatchState.applied(id);
+                return true;
             }
         });
 
@@ -305,6 +932,213 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
                 MethodNode m = find(c, null, "getChunkImage");
                 return replaceCall("journeymap_chunk_image", m, INVOKEVIRTUAL, "java/awt/image/BufferedImage", "getData",
                         "()Ljava/awt/image/Raster;", "pieceRaster", "(Ljava/awt/image/BufferedImage;)Ljava/awt/image/Raster;");
+            }
+        });
+
+        PATCHES.put("com.zeitheron.hammercore.client.render.Render3D", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // HammerLib looks for its authors' names in the last ten chat lines every frame by cutting a new piece
+                // of text out at every letter: over a gigabyte of garbage in 90 seconds of play on a server.
+                // It also rebuilds each line's text from its pieces every frame; a line's text does not change.
+                MethodNode m = find(c, null, "rne");
+                boolean changed = substringEquals("hammerlib_chat", m);
+                changed |= replaceCallIn("hammerlib_chat_text", m, INVOKEINTERFACE, "net/minecraft/util/text/ITextComponent",
+                        "func_150260_c|getUnformattedText", "()Ljava/lang/String;", "better112/perf/ModFixes", "unformattedText",
+                        "(Ljava/lang/Object;)Ljava/lang/String;");
+                return changed;
+            }
+        });
+
+        PATCHES.put("vazkii.quark.client.feature.RenderItemsInChat", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Quark looks for item links in the twenty newest chat lines every frame, stripping the colour codes
+                // from each piece of text with a regular expression; the pieces are the same texts frame after frame.
+                return replaceCallIn("quark_chat", find(c, null, "renderSymbols"), INVOKESTATIC, "net/minecraft/util/text/TextFormatting",
+                        "func_110646_a|getTextWithoutFormattingCodes", "(Ljava/lang/String;)Ljava/lang/String;", "better112/perf/ModFixes",
+                        "stripFormatting", "(Ljava/lang/String;)Ljava/lang/String;");
+            }
+        });
+
+        addPatch("net.minecraft.world.chunk.Chunk", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // A public reading of the chunk's own "has ever held an entity" flag, for the entity lister below.
+                String id = "chunk_entity_flag";
+                FieldNode flag = null;
+                for (FieldNode f : c.fields) {
+                    if (f.desc.equals("Z") && (f.name.equals("field_76644_m") || f.name.equals("hasEntities"))) {
+                        flag = f;
+                    }
+                }
+                if (flag == null || !PatchState.enabled(id) || c.interfaces.contains("better112/core/EntityPresence")) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                c.interfaces.add("better112/core/EntityPresence");
+                MethodNode getter = new MethodNode(ACC_PUBLIC, "better112_hasEntities", "()Z", null, null);
+                getter.instructions.add(new VarInsnNode(ALOAD, 0));
+                getter.instructions.add(new FieldInsnNode(GETFIELD, c.name, flag.name, "Z"));
+                getter.instructions.add(new InsnNode(IRETURN));
+                c.methods.add(getter);
+                PatchState.applied(id);
+                return true;
+            }
+        });
+
+        ClassPatch entityLister = new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // VintageFix draws entities by listing every entity list of every loaded chunk (16 per chunk, twice a
+                // frame); most chunks have never held an entity, and their lists are skipped without reading them.
+                MethodNode m = find(c, "()Ljava/util/Iterator;", "getLoadedEntityIterator");
+                if (m == null) {
+                    return false;
+                }
+                return replaceCallIn("entity_lists", m, INVOKEVIRTUAL, "net/minecraft/world/chunk/Chunk", "func_177429_s|getEntityLists",
+                        "()[Lnet/minecraft/util/ClassInheritanceMultiMap;", HOOKS, "entityListsToDraw",
+                        "(Lnet/minecraft/world/chunk/Chunk;)[Lnet/minecraft/util/ClassInheritanceMultiMap;");
+            }
+        };
+        PATCHES.put("org.embeddedt.vintagefix.mixin.bugfix.entity_disappearing.MixinRenderGlobal", entityLister);
+
+        PATCHES.put("net.minecraftforge.client.model.PerspectiveMapWrapper", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Every item drawn (hundreds per frame with JEI's list open) recomputes its model's view transform
+                // from the block-corner form, several new matrices each time; the answer per transform never changes.
+                boolean changed = false;
+                for (MethodNode m : c.methods) {
+                    if (m.name.equals("handlePerspective") && (m.access & ACC_STATIC) != 0) {
+                        changed |= replaceCallIn("item_transforms", m, INVOKESTATIC, "net/minecraftforge/common/model/TRSRTransformation",
+                                "blockCornerToCenter", "(Lnet/minecraftforge/common/model/TRSRTransformation;)Lnet/minecraftforge/common/model/TRSRTransformation;",
+                                HOOKS, "blockCornerToCenter",
+                                "(Lnet/minecraftforge/common/model/TRSRTransformation;)Lnet/minecraftforge/common/model/TRSRTransformation;");
+                    }
+                }
+                return changed;
+            }
+        });
+
+        PATCHES.put("com.buuz135.industrial.item.infinity.OneThreeFiveHandler", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Industrial Foregoing turns the id of every mob within 32 blocks into text every other tick to look for
+                // "135135" in it; an id's text never changes, so it is kept.
+                return replaceCallIn("if_entity_ids", find(c, null, "lambda$onClientTick$0"), INVOKEVIRTUAL, "java/util/UUID", "toString",
+                        "()Ljava/lang/String;", "better112/perf/ModFixes", "uuidText", "(Ljava/util/UUID;)Ljava/lang/String;");
+            }
+        });
+
+        PATCHES.put("net.minecraft.tileentity.TileEntity", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // Forge's default render box of a block entity (used to cull its special renderer) asks the block for
+                // its shape and makes a new box, for every such block entity in view, every frame: with a wall of
+                // Storage Drawers that was a tenth of the game thread. The box is kept while the block state, block
+                // type and position it came from are unchanged.
+                String id = "render_boxes";
+                MethodNode m = find(c, "()Lnet/minecraft/util/math/AxisAlignedBB;", "getRenderBoundingBox");
+                if (m == null || !PatchState.enabled(id) || c.interfaces.contains("better112/core/RenderBoxCache")) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                AbstractInsnNode answer = null;
+                int returns = 0;
+                for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+                    if (n.getOpcode() == ARETURN) {
+                        answer = n;
+                        returns++;
+                    }
+                }
+                if (returns != 1) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                String field = "better112_renderBox";
+                c.fields.add(new FieldNode(ACC_PUBLIC, field, "[Ljava/lang/Object;", null, null));
+                c.interfaces.add("better112/core/RenderBoxCache");
+                MethodNode getter = new MethodNode(ACC_PUBLIC, "better112_getRenderBox", "()[Ljava/lang/Object;", null, null);
+                getter.instructions.add(new VarInsnNode(ALOAD, 0));
+                getter.instructions.add(new FieldInsnNode(GETFIELD, c.name, field, "[Ljava/lang/Object;"));
+                getter.instructions.add(new InsnNode(ARETURN));
+                c.methods.add(getter);
+                MethodNode setter = new MethodNode(ACC_PUBLIC, "better112_setRenderBox", "([Ljava/lang/Object;)V", null, null);
+                setter.instructions.add(new VarInsnNode(ALOAD, 0));
+                setter.instructions.add(new VarInsnNode(ALOAD, 1));
+                setter.instructions.add(new FieldInsnNode(PUTFIELD, c.name, field, "[Ljava/lang/Object;"));
+                setter.instructions.add(new InsnNode(RETURN));
+                c.methods.add(setter);
+
+                // kept = Hooks.keptRenderBox(this); if (kept != null) return kept; ... the old body ... keepRenderBox(box, this)
+                int kept = m.maxLocals;
+                m.maxLocals++;
+                InsnList tail = new InsnList();
+                LabelNode miss = resumeLabel(m, tail);
+                InsnList code = new InsnList();
+                code.add(new VarInsnNode(ALOAD, 0));
+                code.add(new MethodInsnNode(INVOKESTATIC, HOOKS, "keptRenderBox", "(Lnet/minecraft/tileentity/TileEntity;)Lnet/minecraft/util/math/AxisAlignedBB;", false));
+                code.add(new VarInsnNode(ASTORE, kept));
+                code.add(new VarInsnNode(ALOAD, kept));
+                code.add(new JumpInsnNode(IFNULL, miss));
+                code.add(new VarInsnNode(ALOAD, kept));
+                code.add(new InsnNode(ARETURN));
+                code.add(tail);
+                m.instructions.insert(code);
+                InsnList store = new InsnList();
+                store.add(new InsnNode(DUP));
+                store.add(new VarInsnNode(ALOAD, 0));
+                store.add(new MethodInsnNode(INVOKESTATIC, HOOKS, "keepRenderBox", "(Lnet/minecraft/util/math/AxisAlignedBB;Lnet/minecraft/tileentity/TileEntity;)V", false));
+                m.instructions.insertBefore(answer, store);
+                PatchState.applied(id);
+                return true;
+            }
+        });
+
+        PATCHES.put("net.minecraft.client.renderer.culling.ClippingHelper", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // The view test of every entity, block entity and chunk tries all eight corners of a box against each
+                // side of the view; the corner furthest along a side decides it, so only that one is tried.
+                String id = "frustum_corners";
+                MethodNode m = find(c, "(DDDDDD)Z", "isBoxInFrustum", "func_78553_b");
+                FieldNode planes = null;
+                for (FieldNode f : c.fields) {
+                    if (f.desc.equals("[[F")) {
+                        planes = f;
+                    }
+                }
+                if (m == null || planes == null || !PatchState.enabled(id)) {
+                    PatchState.failed(id);
+                    return false;
+                }
+                InsnList tail = new InsnList();
+                LabelNode resume = resumeLabel(m, tail);
+                InsnList code = new InsnList();
+                code.add(new FieldInsnNode(GETSTATIC, HOOKS, "frustumBypass", "Z"));
+                code.add(new JumpInsnNode(IFNE, resume));
+                code.add(new VarInsnNode(ALOAD, 0));
+                code.add(new FieldInsnNode(GETFIELD, c.name, planes.name, "[[F"));
+                for (int v = 1; v <= 11; v += 2) {
+                    code.add(new VarInsnNode(DLOAD, v));
+                }
+                code.add(new MethodInsnNode(INVOKESTATIC, HOOKS, "boxInFrustum", "([[FDDDDDD)Z", false));
+                code.add(new InsnNode(IRETURN));
+                code.add(tail);
+                m.instructions.insert(code);
+                PatchState.applied(id);
+                return true;
+            }
+        });
+
+        PATCHES.put("net.minecraft.client.multiplayer.ChunkProviderClient", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // The client's table of loaded chunks is made for 8,192 chunks (16,384 slots) and never shrinks, while
+                // a render distance of 10 to 16 holds 400 to 1,100. VintageFix lists entities to draw by walking every
+                // slot of it twice a frame. Started at 512 it grows to fit, as before, and walks a tenth of the slots.
+                return replaceIntConstant("chunk_table", find(c, null, "<init>"), 8192, 512);
             }
         });
 
@@ -871,12 +1705,17 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
 
     /** Head of method: {@code if (Hooks.hook(args)) return <zero value>;} */
     private static boolean cancelIf(String id, MethodNode m, String hook, String hookDesc, int... vars) {
+        return cancelIfIn(id, m, HOOKS, hook, hookDesc, vars);
+    }
+
+    /** As {@link #cancelIf}, with the hook in another class (one that is safe to load on a dedicated server). */
+    private static boolean cancelIfIn(String id, MethodNode m, String owner, String hook, String hookDesc, int... vars) {
         if (m == null || !PatchState.enabled(id) || (m.access & (ACC_ABSTRACT | ACC_NATIVE)) != 0) {
             PatchState.failed(id);
             return false;
         }
         InsnList test = loadArgs(hookDesc, vars);
-        test.add(new MethodInsnNode(INVOKESTATIC, HOOKS, hook, hookDesc, false));
+        test.add(new MethodInsnNode(INVOKESTATIC, owner, hook, hookDesc, false));
 
         InsnList tail = new InsnList();
         LabelNode resume = resumeLabel(m, tail);
@@ -995,10 +1834,270 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
     }
 
     /**
+     * Underground Biomes' isUBified(stone, state): after its "ore textures on?" setting check, answers from a table
+     * kept in ModFixes when it can; the answer of the map lookup at its end is stored there on the way out.
+     */
+    private static boolean memoizeUbified(MethodNode m) {
+        String id = "ub_ores";
+        if (m == null || !PatchState.enabled(id)) {
+            PatchState.failed(id);
+            return false;
+        }
+        String owner = "better112/perf/ModFixes";
+        // Where the setting check jumps to when it is on: the lookup starts there.
+        LabelNode start = null;
+        AbstractInsnNode answer = null;
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+            if (start == null && n.getOpcode() == IFNE && n.getPrevious() instanceof MethodInsnNode
+                    && ((MethodInsnNode) n.getPrevious()).name.equals("ubifyOres")) {
+                start = ((JumpInsnNode) n).label;
+            }
+            if (n.getOpcode() == IRETURN && n.getPrevious() instanceof MethodInsnNode
+                    && ((MethodInsnNode) n.getPrevious()).name.equals("containsKey")) {
+                answer = n;
+            }
+        }
+        if (start == null || answer == null) {
+            PatchState.failed(id);
+            return false;
+        }
+        AbstractInsnNode at = start;
+        while (at.getNext() != null && at.getNext().getOpcode() < 0) {
+            at = at.getNext(); // past the label's line number and stack map frame
+        }
+        InsnList check = new InsnList();
+        LabelNode miss = new LabelNode();
+        check.add(new VarInsnNode(ALOAD, 1));
+        check.add(new VarInsnNode(ALOAD, 2));
+        check.add(new MethodInsnNode(INVOKESTATIC, owner, "ubKnown", "(Ljava/lang/Object;Ljava/lang/Object;)Z", false));
+        check.add(new JumpInsnNode(IFEQ, miss));
+        check.add(new VarInsnNode(ALOAD, 1));
+        check.add(new VarInsnNode(ALOAD, 2));
+        check.add(new MethodInsnNode(INVOKESTATIC, owner, "ubAnswer", "(Ljava/lang/Object;Ljava/lang/Object;)Z", false));
+        check.add(new InsnNode(IRETURN));
+        check.add(miss);
+        check.add(new FrameNode(F_SAME, 0, null, 0, null));
+        m.instructions.insert(at, check);
+        InsnList store = new InsnList();
+        store.add(new InsnNode(DUP));
+        store.add(new VarInsnNode(ALOAD, 1));
+        store.add(new VarInsnNode(ALOAD, 2));
+        store.add(new MethodInsnNode(INVOKESTATIC, owner, "ubStore", "(ZLjava/lang/Object;Ljava/lang/Object;)V", false));
+        m.instructions.insertBefore(answer, store);
+        PatchState.applied(id);
+        return true;
+    }
+
+    /** Underground Biomes' getUBifiedOre(stone, meta, oreState): answers kept in ModFixes, stored on the way out. */
+    private static boolean memoizeUbOre(MethodNode m) {
+        String id = "ub_ore_states";
+        if (m == null || !PatchState.enabled(id)) {
+            PatchState.failed(id);
+            return false;
+        }
+        AbstractInsnNode answer = null;
+        int returns = 0;
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+            if (n.getOpcode() == ARETURN) {
+                answer = n;
+                returns++;
+            }
+        }
+        if (returns != 1) {
+            PatchState.failed(id);
+            return false;
+        }
+        String owner = "better112/perf/ModFixes", desc = "(Ljava/lang/Object;ILjava/lang/Object;)Ljava/lang/Object;";
+        InsnList tail = new InsnList();
+        LabelNode miss = resumeLabel(m, tail);
+        InsnList code = new InsnList();
+        code.add(new VarInsnNode(ALOAD, 1));
+        code.add(new VarInsnNode(ILOAD, 2));
+        code.add(new VarInsnNode(ALOAD, 3));
+        code.add(new MethodInsnNode(INVOKESTATIC, owner, "ubOre", desc, false));
+        code.add(new JumpInsnNode(IFNULL, miss));
+        code.add(new VarInsnNode(ALOAD, 1));
+        code.add(new VarInsnNode(ILOAD, 2));
+        code.add(new VarInsnNode(ALOAD, 3));
+        code.add(new MethodInsnNode(INVOKESTATIC, owner, "ubOre", desc, false));
+        code.add(new TypeInsnNode(CHECKCAST, "net/minecraft/block/state/IBlockState"));
+        code.add(new InsnNode(ARETURN));
+        code.add(tail);
+        m.instructions.insert(code);
+        InsnList store = new InsnList();
+        store.add(new InsnNode(DUP));
+        store.add(new VarInsnNode(ALOAD, 1));
+        store.add(new VarInsnNode(ILOAD, 2));
+        store.add(new VarInsnNode(ALOAD, 3));
+        store.add(new MethodInsnNode(INVOKESTATIC, owner, "ubOreStore", "(Ljava/lang/Object;Ljava/lang/Object;ILjava/lang/Object;)V", false));
+        m.instructions.insertBefore(answer, store);
+        PatchState.applied(id);
+        return true;
+    }
+
+    /**
+     * {@code a.substring(i, j).equals(b)}, where b is an argument read by one getter, becomes
+     * {@code ModFixes.regionEquals(a, i, j, b)}: the same answer without copying the text.
+     */
+    private static boolean substringEquals(String id, MethodNode m) {
+        if (m == null || !PatchState.enabled(id)) {
+            PatchState.failed(id);
+            return false;
+        }
+        boolean changed = false;
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+            if (!(n instanceof MethodInsnNode) || n.getOpcode() != INVOKEVIRTUAL) {
+                continue;
+            }
+            MethodInsnNode sub = (MethodInsnNode) n;
+            if (!sub.owner.equals("java/lang/String") || !sub.name.equals("substring") || !sub.desc.equals("(II)Ljava/lang/String;")) {
+                continue;
+            }
+            AbstractInsnNode load = sub.getNext(), getter = load == null ? null : load.getNext(), eq = getter == null ? null : getter.getNext();
+            if (load == null || load.getOpcode() != ALOAD || !(getter instanceof MethodInsnNode) || getter.getOpcode() != INVOKEVIRTUAL
+                    || !((MethodInsnNode) getter).desc.equals("()Ljava/lang/String;") || !(eq instanceof MethodInsnNode)
+                    || !((MethodInsnNode) eq).owner.equals("java/lang/String") || !((MethodInsnNode) eq).name.equals("equals")) {
+                continue;
+            }
+            MethodInsnNode region = new MethodInsnNode(INVOKESTATIC, "better112/perf/ModFixes", "regionEquals",
+                    "(Ljava/lang/String;IILjava/lang/Object;)Z", false);
+            m.instructions.set(eq, region);
+            m.instructions.remove(sub);
+            n = region;
+            changed = true;
+        }
+        if (changed) {
+            PatchState.applied(id);
+        } else {
+            PatchState.failed(id);
+        }
+        return changed;
+    }
+
+    /**
+     * Particle.move(0, 0, 0): the game still gathers the collision boxes around the particle and makes three moved
+     * copies of its box, to move it by nothing. Underwater ambient particles never move (their speed is multiplied
+     * by zero), and near water there are thousands, every tick. With all three distances exactly zero, the end of
+     * move() is what remains: the position is read back from the box and the particle is not on the ground.
+     * The two names are read from move() itself, which calls and sets nothing else of that shape.
+     */
+    private static boolean patchParticleStill(MethodNode m) {
+        String id = "particle_still";
+        if (m == null || !PatchState.enabled(id)) {
+            PatchState.failed(id);
+            return false;
+        }
+        String particle = "net/minecraft/client/particle/Particle";
+        MethodInsnNode reset = null;
+        FieldInsnNode ground = null;
+        int resets = 0, grounds = 0;
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+            if (n.getOpcode() == INVOKEVIRTUAL && ((MethodInsnNode) n).owner.equals(particle) && ((MethodInsnNode) n).desc.equals("()V")) {
+                reset = (MethodInsnNode) n;
+                resets++;
+            }
+            if (n.getOpcode() == PUTFIELD && ((FieldInsnNode) n).owner.equals(particle) && ((FieldInsnNode) n).desc.equals("Z")) {
+                ground = (FieldInsnNode) n;
+                grounds++;
+            }
+        }
+        if (resets != 1 || grounds != 1) {
+            PatchState.failed(id);
+            return false;
+        }
+        InsnList tail = new InsnList();
+        LabelNode resume = resumeLabel(m, tail);
+        InsnList code = new InsnList();
+        for (int var = 1; var <= 5; var += 2) {
+            code.add(new VarInsnNode(DLOAD, var));
+            code.add(new InsnNode(DCONST_0));
+            code.add(new InsnNode(DCMPL));
+            code.add(new JumpInsnNode(IFNE, resume));
+        }
+        code.add(new VarInsnNode(ALOAD, 0));
+        code.add(new MethodInsnNode(INVOKEVIRTUAL, particle, reset.name, "()V", false));
+        code.add(new VarInsnNode(ALOAD, 0));
+        code.add(new InsnNode(ICONST_0));
+        code.add(new FieldInsnNode(PUTFIELD, particle, ground.name, "Z"));
+        code.add(new InsnNode(RETURN));
+        code.add(tail);
+        m.instructions.insert(code);
+        PatchState.applied(id);
+        return true;
+    }
+
+    /** InventoryPlayer.getStackInSlot: {@code return ModFixes.slotOf(this.allInventories, index);} at its head. */
+    private static boolean patchInventorySlot(MethodNode m) {
+        String id = "inventory_slot";
+        if (m == null || !PatchState.enabled(id)) {
+            PatchState.failed(id);
+            return false;
+        }
+        FieldInsnNode lists = null;
+        int reads = 0;
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+            if (n.getOpcode() == GETFIELD && ((FieldInsnNode) n).desc.equals("Ljava/util/List;")
+                    && ((FieldInsnNode) n).owner.equals("net/minecraft/entity/player/InventoryPlayer")) {
+                lists = (FieldInsnNode) n;
+                reads++;
+            }
+        }
+        if (reads != 1) {
+            PatchState.failed(id);
+            return false;
+        }
+        // The old body stays behind the return; code after a return needs a stack map frame, which this provides.
+        InsnList tail = new InsnList();
+        resumeLabel(m, tail);
+        InsnList code = new InsnList();
+        code.add(new VarInsnNode(ALOAD, 0));
+        code.add(new FieldInsnNode(GETFIELD, lists.owner, lists.name, lists.desc));
+        code.add(new VarInsnNode(ILOAD, 1));
+        code.add(new MethodInsnNode(INVOKESTATIC, "better112/perf/ModFixes", "slotOf",
+                "(Ljava/util/List;I)Lnet/minecraft/item/ItemStack;", false));
+        code.add(new InsnNode(ARETURN));
+        code.add(tail);
+        m.instructions.insert(code);
+        PatchState.applied(id);
+        return true;
+    }
+
+    /** Swaps a whole-number constant the method pushes (sipush or ldc) for another. */
+    private static boolean replaceIntConstant(String id, MethodNode m, int from, int to) {
+        if (m == null || !PatchState.enabled(id)) {
+            PatchState.failed(id);
+            return false;
+        }
+        boolean changed = false;
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+            boolean match = n.getOpcode() == SIPUSH && ((IntInsnNode) n).operand == from
+                    || n.getOpcode() == LDC && Integer.valueOf(from).equals(((LdcInsnNode) n).cst);
+            if (match) {
+                AbstractInsnNode push = new LdcInsnNode(Integer.valueOf(to));
+                m.instructions.set(n, push);
+                n = push;
+                changed = true;
+            }
+        }
+        if (changed) {
+            PatchState.applied(id);
+        } else {
+            PatchState.failed(id);
+        }
+        return changed;
+    }
+
+    /**
      * Every call of owner.name+desc in the method becomes a call of a static Hooks method that takes the same values.
      * The name may list the SRG and MCP names of a method, joined with |.
      */
     private static boolean replaceCall(String id, MethodNode m, int opcode, String owner, String name, String desc, String hook, String hookDesc) {
+        return replaceCallIn(id, m, opcode, owner, name, desc, HOOKS, hook, hookDesc);
+    }
+
+    /** As {@link #replaceCall}, with the replacement in another class. */
+    private static boolean replaceCallIn(String id, MethodNode m, int opcode, String owner, String name, String desc, String hookOwner,
+            String hook, String hookDesc) {
         if (m == null || !PatchState.enabled(id)) {
             PatchState.failed(id);
             return false;
@@ -1008,7 +2107,7 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
         for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
             if (n.getOpcode() == opcode && ((MethodInsnNode) n).owner.equals(owner) && names.contains(((MethodInsnNode) n).name)
                     && ((MethodInsnNode) n).desc.equals(desc)) {
-                MethodInsnNode call = new MethodInsnNode(INVOKESTATIC, HOOKS, hook, hookDesc, false);
+                MethodInsnNode call = new MethodInsnNode(INVOKESTATIC, hookOwner, hook, hookDesc, false);
                 m.instructions.set(n, call);
                 n = call;
                 changed = true;

@@ -37,6 +37,46 @@ public final class JeiBridge {
         return out;
     }
 
+    /**
+     * Self-test: for each search (comma-separated), how many ingredients JEI finds and a checksum of which ones, in
+     * order, to compare one build of the mod with another.
+     */
+    public static String searchCounts(String searches) {
+        if (BetterJeiPlugin.runtime == null) {
+            return "JEI not ready";
+        }
+        mezz.jei.api.IIngredientFilter filter = BetterJeiPlugin.runtime.getIngredientFilter();
+        String typed = filter.getFilterText();
+        StringBuilder out = new StringBuilder();
+        for (String search : searches.split(",")) {
+            filter.setFilterText(search);
+            long ordered = 0;
+            long tags = 0;
+            int count = 0;
+            for (Object each : filter.getFilteredIngredients()) {
+                String key;
+                if (each instanceof net.minecraft.item.ItemStack) {
+                    net.minecraft.item.ItemStack stack = (net.minecraft.item.ItemStack) each;
+                    key = stack.getItem().getRegistryName() + "@" + stack.getMetadata();
+                    if (stack.hasTagCompound()) {
+                        tags += stack.getTagCompound().toString().hashCode();
+                    }
+                } else if (each instanceof net.minecraftforge.fluids.FluidStack) {
+                    key = "fluid:" + ((net.minecraftforge.fluids.FluidStack) each).getFluid().getName();
+                } else {
+                    key = each.getClass().getName();
+                }
+                ordered = ordered * 31 + key.hashCode();
+                count++;
+            }
+            // In order without tags; the tags as a sum (a tag may hold a number made at random).
+            out.append(out.length() == 0 ? "" : "; ").append('"').append(search).append("\" ").append(count).append(" #")
+                    .append(Long.toHexString(ordered)).append(" tags #").append(Long.toHexString(tags));
+        }
+        filter.setFilterText(typed);
+        return out.toString();
+    }
+
     /** Recipe bookmarks listen for their key and draw their preview through this. */
     public static Object recipeMarkEvents() {
         return new RecipeMarks.Events();

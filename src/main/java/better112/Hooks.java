@@ -55,6 +55,19 @@ public final class Hooks {
         return pattern.matcher(text).replaceAll(replacement);
     }
 
+    /** String.split(regex), with the pattern compiled once per expression (the same pieces: split is defined as this). */
+    public static String[] split(String text, String regex) {
+        java.util.regex.Pattern pattern = PATTERNS.get(regex);
+        if (pattern == null) {
+            if (PATTERNS.size() > 64) {
+                PATTERNS.clear();
+            }
+            pattern = java.util.regex.Pattern.compile(regex);
+            PATTERNS.put(regex, pattern);
+        }
+        return pattern.split(text, 0);
+    }
+
     /** True once the client has left its world: client-side work for the player has nothing to act on. */
     public static boolean noClientPlayer() {
         return net.minecraft.client.Minecraft.getMinecraft().player == null;
@@ -198,10 +211,122 @@ public final class Hooks {
         return Occlusion.isHidden(entity);
     }
 
+    /** Set only by the self-test, to compare with the game's own eight-corner test. */
+    public static boolean frustumBypass;
+
+    /**
+     * ClippingHelper.isBoxInFrustum with one corner per side instead of eight: the corner furthest along a side's
+     * direction (largest x where the side's x weight is not negative, and so on) has the largest sum of the eight,
+     * the same sum in the same order as the game works it out; if it is not in front, none is.
+     */
+    public static boolean boxInFrustum(float[][] planes, double minX, double minY, double minZ, double maxX, double maxY, double maxZ) {
+        for (int i = 0; i < 6; i++) {
+            float[] p = planes[i];
+            double x = p[0] >= 0.0F ? maxX : minX;
+            double y = p[1] >= 0.0F ? maxY : minY;
+            double z = p[2] >= 0.0F ? maxZ : minZ;
+            if ((double) p[0] * x + (double) p[1] * y + (double) p[2] * z + (double) p[3] <= 0.0D) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * A block entity's render box kept from an earlier frame, or null: it is used only while the block state at its
+     * position, its block type and its position object are the ones it was worked out from.
+     */
+    public static AxisAlignedBB keptRenderBox(TileEntity te) {
+        if (!(te instanceof better112.core.RenderBoxCache)) {
+            return null;
+        }
+        Object[] kept = ((better112.core.RenderBoxCache) te).better112_getRenderBox();
+        net.minecraft.world.World world = te.getWorld();
+        if (kept == null || world == null) {
+            return null;
+        }
+        net.minecraft.util.math.BlockPos pos = te.getPos();
+        if (kept[1] != pos || kept[2] != te.getBlockType() || kept[3] != world || world.getBlockState(pos) != kept[0]) {
+            return null;
+        }
+        return (AxisAlignedBB) kept[4];
+    }
+
+    public static void keepRenderBox(AxisAlignedBB box, TileEntity te) {
+        net.minecraft.world.World world = te.getWorld();
+        if (te instanceof better112.core.RenderBoxCache && world != null && box != null) {
+            net.minecraft.util.math.BlockPos pos = te.getPos();
+            ((better112.core.RenderBoxCache) te).better112_setRenderBox(new Object[] {world.getBlockState(pos), pos, te.getBlockType(), world, box});
+        }
+    }
+
+    /** Forge's TRSRTransformation.blockCornerToCenter answers, by transform (the transforms are fixed objects per model). */
+    private static final Map<Object, net.minecraftforge.common.model.TRSRTransformation> CORNER_TO_CENTER =
+            new IdentityHashMap<Object, net.minecraftforge.common.model.TRSRTransformation>();
+
+    /** TRSRTransformation.blockCornerToCenter(t): a pure function of an unchangeable transform, so kept. */
+    public static net.minecraftforge.common.model.TRSRTransformation blockCornerToCenter(net.minecraftforge.common.model.TRSRTransformation t) {
+        synchronized (CORNER_TO_CENTER) {
+            net.minecraftforge.common.model.TRSRTransformation centred = CORNER_TO_CENTER.get(t);
+            if (centred == null) {
+                centred = net.minecraftforge.common.model.TRSRTransformation.blockCornerToCenter(t);
+                if (CORNER_TO_CENTER.size() >= 4096) {
+                    CORNER_TO_CENTER.clear(); // resource reloads make new models; old ones fall out
+                }
+                CORNER_TO_CENTER.put(t, centred);
+            }
+            return centred;
+        }
+    }
+
+    private static final net.minecraft.util.ClassInheritanceMultiMap<?>[] NO_ENTITY_LISTS = new net.minecraft.util.ClassInheritanceMultiMap<?>[0];
+
+    /** A chunk's entity lists for VintageFix's lister; none at all for a chunk that has never held an entity. */
+    public static net.minecraft.util.ClassInheritanceMultiMap<?>[] entityListsToDraw(net.minecraft.world.chunk.Chunk chunk) {
+        if (chunk instanceof better112.core.EntityPresence && !((better112.core.EntityPresence) chunk).better112_hasEntities()) {
+            return NO_ENTITY_LISTS;
+        }
+        return chunk.getEntityLists();
+    }
+
     public static void captureCamera(ICamera cam) {
         camera = cam;
         cameraFrame = frame;
+        cullPlanes = null;
+        if (cam != null && cam.getClass() == Frustum.class && !frustumFieldsFailed) {
+            try {
+                if (frustumHelper == null) {
+                    frustumHelper = net.minecraftforge.fml.common.ObfuscationReflectionHelper.findField(Frustum.class, "field_78552_a");
+                    frustumX = net.minecraftforge.fml.common.ObfuscationReflectionHelper.findField(Frustum.class, "field_78550_b");
+                    frustumY = net.minecraftforge.fml.common.ObfuscationReflectionHelper.findField(Frustum.class, "field_78551_c");
+                    frustumZ = net.minecraftforge.fml.common.ObfuscationReflectionHelper.findField(Frustum.class, "field_78549_d");
+                }
+                // The planes are read when testing, not copied: the game refills them in place, and the camera's own
+                // test reads them the same way. The position is set once a frame, before this.
+                cullPlanes = ((net.minecraft.client.renderer.culling.ClippingHelper) frustumHelper.get(cam)).frustum;
+                cullX = frustumX.getDouble(cam);
+                cullY = frustumY.getDouble(cam);
+                cullZ = frustumZ.getDouble(cam);
+            } catch (Throwable t) {
+                frustumFieldsFailed = true;
+                frustumFailure = String.valueOf(t);
+                cullPlanes = null;
+            }
+        }
     }
+
+    private static String frustumFailure;
+
+    /** For the self-test: which particle view test is in use, and why not the quick one. */
+    public static String cullInfo() {
+        return "camera " + (camera == null ? "none" : camera.getClass().getName()) + ", quick test " + (cullPlanes != null)
+                + (frustumFailure == null ? "" : ", failed: " + frustumFailure);
+    }
+
+    private static float[][] cullPlanes;
+    private static double cullX, cullY, cullZ;
+    private static java.lang.reflect.Field frustumHelper, frustumX, frustumY, frustumZ;
+    private static boolean frustumFieldsFailed;
 
     // ------------------------------------------------------------------------------------
     // Particles
@@ -215,6 +340,26 @@ public final class Hooks {
             return false;
         }
         AxisAlignedBB box = particle.getBoundingBox();
+        float[][] planes = cullPlanes;
+        if (planes != null) {
+            // The game's test tries the eight corners of the box against each side of the view; the corner that
+            // reaches furthest across a side is the centre plus the box's reach along that side's direction, so
+            // one sum per side gives the same answer. Near water thousands of particles are tested every frame.
+            double ex = (box.maxX - box.minX) * 0.5D + PARTICLE_MARGIN;
+            double ey = (box.maxY - box.minY) * 0.5D + PARTICLE_MARGIN;
+            double ez = (box.maxZ - box.minZ) * 0.5D + PARTICLE_MARGIN;
+            double cx = (box.minX + box.maxX) * 0.5D - cullX;
+            double cy = (box.minY + box.maxY) * 0.5D - cullY;
+            double cz = (box.minZ + box.maxZ) * 0.5D - cullZ;
+            for (int i = 0; i < planes.length; i++) {
+                float[] p = planes[i];
+                double a = p[0], b = p[1], c = p[2];
+                if (a * cx + b * cy + c * cz + p[3] + Math.abs(a) * ex + Math.abs(b) * ey + Math.abs(c) * ez <= 0.0D) {
+                    return true;
+                }
+            }
+            return false;
+        }
         return !((Frustum) camera).isBoxInFrustum(box.minX - PARTICLE_MARGIN, box.minY - PARTICLE_MARGIN,
                 box.minZ - PARTICLE_MARGIN, box.maxX + PARTICLE_MARGIN, box.maxY + PARTICLE_MARGIN,
                 box.maxZ + PARTICLE_MARGIN);
@@ -260,6 +405,18 @@ public final class Hooks {
 
     public static boolean noBlockHitParticles() {
         return !BetterConfig.blockBreaking || !BetterConfig.particles;
+    }
+
+    /**
+     * True while the open screen paints over the whole window before anything else (the quest book): the world drawn
+     * behind it would never be seen, so it is not drawn. It is drawn again from the first frame after the screen closes.
+     */
+    public static boolean worldCovered() {
+        if (!ClientTweaks.QUESTS_LOADED) {
+            return false;
+        }
+        net.minecraft.client.gui.GuiScreen screen = net.minecraft.client.Minecraft.getMinecraft().currentScreen;
+        return screen != null && better112.quests.QuestsBridge.coversWorld(screen);
     }
 
     // ------------------------------------------------------------------------------------

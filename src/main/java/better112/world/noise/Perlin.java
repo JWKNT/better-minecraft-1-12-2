@@ -6,6 +6,16 @@ public final class Perlin {
     private static final int[][] GRADIENT = {
         {1, 1, 0}, {-1, 1, 0}, {1, -1, 0}, {-1, -1, 0}, {1, 0, 1}, {-1, 0, 1}, {1, 0, -1}, {-1, 0, -1},
         {0, 1, 1}, {0, -1, 1}, {0, 1, -1}, {0, -1, -1}, {1, 1, 0}, {0, -1, 1}, {-1, 1, 0}, {0, -1, -1}};
+    /** The same directions as three flat tables: one load per axis instead of a row and then its numbers. */
+    private static final double[] GX = new double[16], GY = new double[16], GZ = new double[16];
+
+    static {
+        for (int i = 0; i < 16; i++) {
+            GX[i] = GRADIENT[i][0];
+            GY[i] = GRADIENT[i][1];
+            GZ[i] = GRADIENT[i][2];
+        }
+    }
 
     private final byte[] p = new byte[256];
     private final double xo, yo, zo;
@@ -64,8 +74,8 @@ public final class Perlin {
     }
 
     private static double dot(int hash, double x, double y, double z) {
-        int[] g = GRADIENT[hash & 15];
-        return g[0] * x + g[1] * y + g[2] * z;
+        int h = hash & 15;
+        return GX[h] * x + GY[h] * y + GZ[h] * z;
     }
 
     private static double smooth(double t) {

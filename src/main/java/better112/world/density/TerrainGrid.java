@@ -9,6 +9,7 @@ public final class TerrainGrid {
     public TerrainGrid(WorldData data, long seed, int cellWidth, int cellHeight) {
         grid.cellWidth = cellWidth;
         grid.cellHeight = cellHeight;
+        grid.sizesSet();
         loader = new DensityLoader(data, seed, grid);
     }
 

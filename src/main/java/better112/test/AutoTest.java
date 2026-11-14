@@ -56,7 +56,7 @@ import org.lwjgl.opengl.Display;
  *   freelook:on|off|turn:YAW,PITCH              zoomtest:hold|release|scroll:N|state  newitems
  *   worlds:TEXT         glint:SPEED:STRENGTH    chatcopy            chatdraft:TEXT
  *   titles              titleshow:TEXT:SUB      leaves:RADIUS       grass:RADIUS     persp:N  viewstate
- *   volume:bg|fg        worldkey:KEYCODE        rarity:ITEM         jeisearch:TEXT|off
+ *   volume:bg|fg        worldkey:KEYCODE        rarity:ITEM         jeisearch:TEXT|off  jeicount:A,B
  *   water:TICKS|state   fireflies:N             debugtargets
  *   zoom:ITEM|off       idle:MINUTES|state      ripples:N           mounthud   ride   ownfx
  *   join:HOST:PORT      online
@@ -65,6 +65,58 @@ import org.lwjgl.opengl.Display;
  */
 public final class AutoTest {
 
+    /** Every item Thaumcraft holds aspects for, as a count and a checksum that does not depend on order. */
+    private static String thaumcraftAspects() {
+        try {
+            Object tags = Class.forName("thaumcraft.api.internal.CommonInternals").getField("objectTags").get(null);
+            if (!(tags instanceof java.util.Map)) {
+                return "no table";
+            }
+            long sum = 0;
+            int count = 0;
+            java.util.TreeMap<String, String> lines = new java.util.TreeMap<String, String>();
+            for (Object o : ((java.util.Map<?, ?>) tags).entrySet()) {
+                java.util.Map.Entry<?, ?> e = (java.util.Map.Entry<?, ?>) o;
+                Object list = e.getValue();
+                Object[] aspects = (Object[]) list.getClass().getMethod("getAspectsSortedByName").invoke(list);
+                StringBuilder text = new StringBuilder().append(e.getKey()).append('=');
+                for (Object aspect : aspects) {
+                    String tag = (String) aspect.getClass().getMethod("getTag").invoke(aspect);
+                    Object amount = list.getClass().getMethod("getAmount", aspect.getClass()).invoke(list, aspect);
+                    text.append(tag).append(':').append(amount).append(',');
+                }
+                sum += text.toString().hashCode() * 0x9E3779B97F4A7C15L;
+                count++;
+                lines.put(String.valueOf(e.getKey()), text.toString());
+            }
+            java.io.File out = new java.io.File(net.minecraft.client.Minecraft.getMinecraft().gameDir, "better112-autotest/tcaspects.txt");
+            java.nio.file.Files.write(out.toPath(), lines.values(), java.nio.charset.StandardCharsets.UTF_8);
+            return count + " items, checksum " + Long.toHexString(sum);
+        } catch (Throwable t) {
+            return "not read: " + t;
+        }
+    }
+
+    /** Two ray trace results are the same: both missing, or the same kind, side, block and exact hit point. */
+    private static boolean sameTrace(net.minecraft.util.math.RayTraceResult a, net.minecraft.util.math.RayTraceResult b) {
+        if (a == null || b == null) {
+            return a == b;
+        }
+        if (a.typeOfHit != b.typeOfHit || a.sideHit != b.sideHit || a.entityHit != b.entityHit) {
+            return false;
+        }
+        net.minecraft.util.math.BlockPos pa = a.getBlockPos(), pb = b.getBlockPos();
+        if (pa == null ? pb != null : !pa.equals(pb)) {
+            return false;
+        }
+        if (a.hitVec == null || b.hitVec == null) {
+            return a.hitVec == b.hitVec;
+        }
+        return Double.doubleToLongBits(a.hitVec.x) == Double.doubleToLongBits(b.hitVec.x)
+                && Double.doubleToLongBits(a.hitVec.y) == Double.doubleToLongBits(b.hitVec.y)
+                && Double.doubleToLongBits(a.hitVec.z) == Double.doubleToLongBits(b.hitVec.z);
+    }
+
     private final Deque<String> steps = new ArrayDeque<String>();
     private final List<String> report = java.util.Collections.synchronizedList(new ArrayList<String>());
     private final Minecraft mc = Minecraft.getMinecraft();
@@ -72,6 +124,7 @@ public final class AutoTest {
     private int waitTicks;
     private boolean waitingForMenu = true;
     private boolean waitingForWorld;
+    private long worldAsked;
     private int walkTicks;
     private final List<String> chatSeen = new ArrayList<String>();
     private final List<String> saplingResults = java.util.Collections.synchronizedList(new ArrayList<String>());
@@ -87,6 +140,8 @@ public final class AutoTest {
     private long fpsStartNanos;
     private String fpsLabel;
     private final List<Long> fpsFrames = new ArrayList<Long>();
+    /** Frames over 100 ms in the current fps step: when each began (wall clock) and how long it took. */
+    private final List<String> fpsSlow = new ArrayList<String>();
     private long fpsLastFrame;
 
     /**
@@ -156,6 +211,8 @@ public final class AutoTest {
             waitingForMenu = false;
             mc.gameSettings.pauseOnLostFocus = false;
             waitTicks = 20;
+            report.add("title screen " + (System.currentTimeMillis() - java.lang.management.ManagementFactory.getRuntimeMXBean().getStartTime())
+                    + " ms after the game started");
             report.add("patches applied: " + new TreeSet<String>(PatchState.appliedIds()));
             report.add("patches failed: " + new TreeSet<String>(PatchState.failedIds()));
             report.add("modern textures: " + ModernTextures.isAvailable() + " - " + ModernTextures.statusText());
@@ -172,6 +229,10 @@ public final class AutoTest {
                 }
             }
             waitingForWorld = false;
+            if (worldAsked != 0) {
+                report.add("world joined " + (System.nanoTime() - worldAsked) / 1000000 + " ms after asking");
+                worldAsked = 0;
+            }
             waitTicks = 100;
         }
         idle();
@@ -215,7 +276,9 @@ public final class AutoTest {
                 WorldSettings settings = new WorldSettings(worldSeed, GameType.CREATIVE, true, false, type);
                 settings.enableCommands();
                 String name = "better112_" + (arg.isEmpty() ? "default" : arg);
+                worldAsked = System.nanoTime();
                 mc.launchIntegratedServer(name, name, settings);
+                report.add("world " + name + ": server started in " + (System.nanoTime() - worldAsked) / 1000000 + " ms");
                 waitingForWorld = true;
                 break;
             }
@@ -246,6 +309,7 @@ public final class AutoTest {
                 mc.gameSettings.limitFramerate = 260;
                 fpsLabel = p.length > 2 ? p[2] : "fps";
                 fpsFrames.clear();
+                fpsSlow.clear();
                 fpsStartNanos = System.nanoTime();
                 fpsLastFrame = fpsStartNanos;
                 fpsEndNanos = fpsStartNanos + (long) (Double.parseDouble(arg) * 1.0E9D);
@@ -643,8 +707,14 @@ public final class AutoTest {
                             }
                             report.add("gobiome " + wanted + ": " + foundName + " at " + found.getX() + ", " + found.getZ());
                             net.minecraft.entity.player.EntityPlayerMP sp = server.getPlayerList().getPlayerByUUID(mc.player.getUniqueID());
-                            world.getChunk(found); // generate it, to know how high the ground is
-                            int ground = world.getTopSolidOrLiquidBlock(found).getY();
+                            // Generate it and its neighbours (so it is decorated too), to know how high the ground is: the
+                            // top of the solid ground, or of water and treetops where they are higher.
+                            for (int cx = -1; cx <= 1; cx++) {
+                                for (int cz = -1; cz <= 1; cz++) {
+                                    world.getChunk((found.getX() >> 4) + cx, (found.getZ() >> 4) + cz);
+                                }
+                            }
+                            int ground = Math.max(world.getTopSolidOrLiquidBlock(found).getY(), world.getHeight(found).getY());
                             sp.connection.setPlayerLocation(found.getX() + 0.5D, ground + above, found.getZ() + 0.5D, sp.rotationYaw, sp.rotationPitch);
                         }
                     });
@@ -983,6 +1053,140 @@ public final class AutoTest {
                         ? better112.jei.JeiBridge.testSearch(arg, !arg.equals("off")) : "no JEI"));
                 waitTicks = 5;
                 break;
+            case "statcheck": {
+                // statcheck - the one-walk stat removal against the game's one-at-a-time removal, on copies
+                String differ = better112.perf.ModFixes.checkStatRemoval();
+                report.add("stat removal check: " + net.minecraft.stats.StatList.ALL_STATS.size() + " stats, "
+                        + (differ == null ? "same result" : differ) + ", patch "
+                        + (PatchState.isApplied("stat_removal") ? "applied" : "not applied"));
+                break;
+            }
+            case "preccheck": {
+                // preccheck - rain heights of every column of the loaded chunks near the player (patched) against a walk
+                // down with a new position per block, as the game's own code does, on a copy of the chunk's heights
+                net.minecraft.world.World w = mc.getIntegratedServer() == null ? null
+                        : mc.getIntegratedServer().getWorld(mc.player.dimension);
+                int columns = 0, differ = 0, keptDiffer = 0;
+                if (w != null) {
+                    int cx = mc.player.chunkCoordX, cz = mc.player.chunkCoordZ;
+                    for (int dx = -6; dx <= 6; dx++) {
+                        for (int dz = -6; dz <= 6; dz++) {
+                            net.minecraft.world.chunk.Chunk chunk = w.getChunkProvider().getLoadedChunk(cx + dx, cz + dz);
+                            if (chunk == null) {
+                                continue;
+                            }
+                            for (int i = 0; i < 256; i++) {
+                                int x = (chunk.x << 4) + (i & 15), z = (chunk.z << 4) + (i >> 4);
+                                int expected = -1;
+                                for (net.minecraft.util.math.BlockPos at = new net.minecraft.util.math.BlockPos(x, chunk.getTopFilledSegment() + 15, z);
+                                        at.getY() > 0; at = at.down()) {
+                                    net.minecraft.block.material.Material material = chunk.getBlockState(at).getMaterial();
+                                    if (material.blocksMovement() || material.isLiquid()) {
+                                        expected = at.getY() + 1;
+                                        break;
+                                    }
+                                }
+                                int[] fresh = new int[256];
+                                java.util.Arrays.fill(fresh, -999);
+                                int got = better112.perf.ModFixes.precipitationHeight(chunk, new net.minecraft.util.math.BlockPos(x, 64, z), fresh).getY();
+                                int game = chunk.getPrecipitationHeight(new net.minecraft.util.math.BlockPos(x, 64, z)).getY();
+                                columns++;
+                                if (got != expected) {
+                                    differ++;
+                                }
+                                if (game != expected) {
+                                    keptDiffer++;
+                                }
+                            }
+                        }
+                    }
+                }
+                report.add("rain height check: " + columns + " columns, " + differ + " differ (" + keptDiffer + " of the chunks' kept heights differ), patch "
+                        + (PatchState.isApplied("precipitation_height") ? "applied" : "not applied"));
+                break;
+            }
+            case "uploadcheck": {
+                // uploadcheck - pictures of several sizes (one needing two passes) uploaded through the game's own texture
+                // upload, read back from the GPU and compared pixel for pixel
+                int[][] sizes = {{16, 16}, {64, 32}, {1024, 1024}, {2048, 2048}, {100, 3000}, {4096, 1100}};
+                java.util.Random random = new java.util.Random(5L);
+                long pixels = 0, differ = 0;
+                for (int[] size : sizes) {
+                    java.awt.image.BufferedImage image = new java.awt.image.BufferedImage(size[0], size[1], java.awt.image.BufferedImage.TYPE_INT_ARGB);
+                    for (int y = 0; y < size[1]; y++) {
+                        for (int x = 0; x < size[0]; x++) {
+                            image.setRGB(x, y, random.nextInt() | 0xFF000000);
+                        }
+                    }
+                    int texture = net.minecraft.client.renderer.texture.TextureUtil.glGenTextures();
+                    net.minecraft.client.renderer.texture.TextureUtil.uploadTextureImageAllocate(texture, image, false, false);
+                    net.minecraft.client.renderer.GlStateManager.bindTexture(texture);
+                    java.nio.IntBuffer read = org.lwjgl.BufferUtils.createIntBuffer(size[0] * size[1]);
+                    org.lwjgl.opengl.GL11.glGetTexImage(org.lwjgl.opengl.GL11.GL_TEXTURE_2D, 0, org.lwjgl.opengl.GL12.GL_BGRA,
+                            org.lwjgl.opengl.GL12.GL_UNSIGNED_INT_8_8_8_8_REV, read);
+                    for (int y = 0; y < size[1]; y++) {
+                        for (int x = 0; x < size[0]; x++) {
+                            pixels++;
+                            if (read.get(y * size[0] + x) != image.getRGB(x, y)) {
+                                differ++;
+                            }
+                        }
+                    }
+                    net.minecraft.client.renderer.texture.TextureUtil.deleteTexture(texture);
+                }
+                report.add("texture upload check: " + sizes.length + " pictures, " + pixels + " pixels, " + differ + " differ, patch "
+                        + (PatchState.isApplied("texture_upload_buffer") ? "applied" : "not applied"));
+                break;
+            }
+            case "fastpath":
+                // fastpath - how many classes Forge's wrapped transformers were handed and how many were skipped
+                report.add("Forge transformer fast path: " + better112.core.ForgeFastPath.summary());
+                break;
+            case "jeioverlay":
+                // jeioverlay:on|off - JEI's ingredient list beside inventories shown or hidden (its own toggle)
+                try {
+                    Class<?> config = Class.forName("mezz.jei.config.Config");
+                    boolean shown = (Boolean) config.getMethod("isOverlayEnabled").invoke(null);
+                    if (shown != arg.equals("on")) {
+                        config.getMethod("toggleOverlayEnabled").invoke(null);
+                    }
+                    report.add("JEI list " + ((Boolean) config.getMethod("isOverlayEnabled").invoke(null) ? "shown" : "hidden"));
+                } catch (Throwable t) {
+                    report.add("JEI list not switched: " + t);
+                }
+                waitTicks = 5;
+                break;
+            case "idcheck":
+                // idcheck - the data fixers' name comparison without making names, against the original
+                report.add("data fixer id check: " + better112.perf.ModFixes.checkIds() + ", patches "
+                        + (PatchState.isApplied("datafix_ids") ? "datafix_ids applied" : "datafix_ids not applied") + ", "
+                        + (PatchState.isApplied("fermium_permissions") ? "fermium_permissions applied" : "fermium_permissions not applied")
+                        + "; permission names: " + better112.perf.ModFixes.permissionNamesInfo());
+                break;
+            case "hcchunks":
+                // hcchunks - how many chunks HammerLib keeps loaded (it gathers and loads them every tick)
+                try {
+                    Class<?> api = Class.forName("com.zeitheron.hammercore.internal.chunk.ChunkloadAPI");
+                    Object forced = api.getMethod("getForcedChunks").invoke(null);
+                    Class<?> loader = Class.forName("com.zeitheron.hammercore.internal.chunk.ChunkLoaderHC");
+                    Object instance = loader.getField("INSTANCE").get(null);
+                    java.lang.reflect.Field chunks = loader.getDeclaredField("chunks");
+                    chunks.setAccessible(true);
+                    report.add("HammerLib forced chunks: " + ((java.util.Collection<?>) forced).size() + ", its own loader holds "
+                            + ((java.util.Collection<?>) chunks.get(instance)).size());
+                } catch (Throwable t) {
+                    report.add("HammerLib forced chunks: not read: " + t);
+                }
+                break;
+            case "tcaspects":
+                // tcaspects - how many items Thaumcraft holds aspects for, and a checksum of all of them
+                report.add("Thaumcraft aspects: " + thaumcraftAspects());
+                break;
+            case "jeicount":
+                // jeicount:A,B,C - for each search, how many ingredients JEI finds and a checksum of which ones
+                report.add("JEI search counts: " + (net.minecraftforge.fml.common.Loader.isModLoaded("jei")
+                        ? better112.jei.JeiBridge.searchCounts(arg) : "no JEI"));
+                break;
             case "water":
                 // water:TICKS - as if the eyes had been under water this long; water:state reports
                 if (!arg.equals("state")) {
@@ -1086,6 +1290,190 @@ public final class AutoTest {
                         runtime.totalMemory() >> 20, runtime.maxMemory() >> 20));
                 break;
             }
+            case "chunkcheck": {
+                // chunkcheck:N - single player: on the server thread, N chunk lookups near the player through
+                // World.getChunk compared with the chunk provider's own loaded chunk
+                final int n = Integer.parseInt(arg);
+                final net.minecraft.server.integrated.IntegratedServer server = mc.getIntegratedServer();
+                if (server == null) {
+                    report.add("chunk check: needs single player");
+                    break;
+                }
+                final int px = mc.player.chunkCoordX, pz = mc.player.chunkCoordZ, dim = mc.player.dimension;
+                server.addScheduledTask(new Runnable() {
+                    @Override
+                    public void run() {
+                        net.minecraft.world.WorldServer world = server.getWorld(dim);
+                        java.util.Random random = new java.util.Random(4321L);
+                        int differ = 0, loaded = 0;
+                        for (int t = 0; t < n; t++) {
+                            int x = px + random.nextInt(9) - 4, z = pz + random.nextInt(9) - 4;
+                            net.minecraft.world.chunk.Chunk own = world.getChunkProvider().getLoadedChunk(x, z);
+                            if (own == null) {
+                                continue;
+                            }
+                            loaded++;
+                            for (int r = 0; r < 3; r++) {
+                                if (world.getChunk(x, z) != own || world.getChunk(new net.minecraft.util.math.BlockPos(x * 16 + r, 64, z * 16 + 15 - r)) != own) {
+                                    differ++;
+                                }
+                            }
+                        }
+                        report.add("chunk check: " + n + " lookups, " + loaded + " of loaded chunks, " + differ + " differ, patch "
+                                + (better112.core.PatchState.isApplied("chunk_lookup") ? "applied" : "not applied"));
+                    }
+                });
+                waitTicks = 10;
+                break;
+            }
+            case "raytest": {
+                // raytest:N - N random rays traced by the game's own World.rayTraceBlocks and by perf.RayTrace; any difference is reported
+                int n = Integer.parseInt(arg);
+                java.util.Random random = new java.util.Random(12345L);
+                net.minecraft.util.math.Vec3d eye = mc.player.getPositionEyes(1.0F);
+                int differ = 0, blocks = 0;
+                String first = null;
+                for (int t = 0; t < n; t++) {
+                    net.minecraft.util.math.Vec3d start, end;
+                    if (t % 4 == 0) {
+                        // On block corners and along the axes, where the sums meet zero.
+                        start = new net.minecraft.util.math.Vec3d(Math.floor(eye.x) + random.nextInt(9) - 4, Math.floor(eye.y) + random.nextInt(5) - 2,
+                                Math.floor(eye.z) + random.nextInt(9) - 4);
+                        int axis = random.nextInt(3);
+                        double length = (random.nextInt(40) - 20) + (random.nextBoolean() ? 0.0D : 0.5D);
+                        end = start.add(axis == 0 ? length : random.nextInt(3) - 1, axis == 1 ? length : 0.0D, axis == 2 ? length : 0.0D);
+                    } else {
+                        double yaw = random.nextDouble() * Math.PI * 2.0D, pitch = (random.nextDouble() - 0.5D) * Math.PI;
+                        double length = 1.0D + random.nextDouble() * 63.0D;
+                        start = eye.add(random.nextGaussian() * 8.0D, random.nextGaussian() * 4.0D, random.nextGaussian() * 8.0D);
+                        end = start.add(Math.cos(yaw) * Math.cos(pitch) * length, Math.sin(pitch) * length, Math.sin(yaw) * Math.cos(pitch) * length);
+                    }
+                    boolean liquid = random.nextBoolean(), noBox = random.nextBoolean(), last = random.nextBoolean();
+                    better112.perf.RayTrace.bypass = true;
+                    net.minecraft.util.math.RayTraceResult want;
+                    try {
+                        want = mc.world.rayTraceBlocks(start, end, liquid, noBox, last);
+                    } finally {
+                        better112.perf.RayTrace.bypass = false;
+                    }
+                    net.minecraft.util.math.RayTraceResult got = mc.world.rayTraceBlocks(start, end, liquid, noBox, last);
+                    if (want != null && want.typeOfHit == net.minecraft.util.math.RayTraceResult.Type.BLOCK) {
+                        blocks++;
+                    }
+                    if (!sameTrace(want, got)) {
+                        differ++;
+                        if (first == null) {
+                            first = start + " -> " + end + " " + liquid + noBox + last + ": " + want + " vs " + got;
+                        }
+                    }
+                }
+                report.add(String.format("ray trace check: %d rays, %d hit blocks, %d differ%s", n, blocks, differ, first == null ? "" : " (first: " + first + ")"));
+                break;
+            }
+            case "particletest": {
+                // particletest - every live particle drawn by the game's own code and by the quick path; the bytes must match
+                int checked = 0, differ = 0, fast = 0;
+                String first = null;
+                try {
+                    java.lang.reflect.Field layersField = net.minecraftforge.fml.common.ObfuscationReflectionHelper.findField(
+                            net.minecraft.client.particle.ParticleManager.class, "field_78876_b");
+                    java.util.ArrayDeque<?>[][] layers = (java.util.ArrayDeque<?>[][]) layersField.get(mc.effectRenderer);
+                    net.minecraft.client.renderer.BufferBuilder a = new net.minecraft.client.renderer.BufferBuilder(1 << 16);
+                    net.minecraft.client.renderer.BufferBuilder b = new net.minecraft.client.renderer.BufferBuilder(1 << 16);
+                    net.minecraft.entity.Entity view = mc.getRenderViewEntity();
+                    float rx = net.minecraft.client.renderer.ActiveRenderInfo.getRotationX(), rz = net.minecraft.client.renderer.ActiveRenderInfo.getRotationZ();
+                    float ryz = net.minecraft.client.renderer.ActiveRenderInfo.getRotationYZ(), rxy = net.minecraft.client.renderer.ActiveRenderInfo.getRotationXY();
+                    float rxz = net.minecraft.client.renderer.ActiveRenderInfo.getRotationXZ();
+                    for (java.util.ArrayDeque<?>[] byDepth : layers) {
+                        for (java.util.ArrayDeque<?> queue : byDepth) {
+                            for (Object o : queue) {
+                                net.minecraft.client.particle.Particle particle = (net.minecraft.client.particle.Particle) o;
+                                a.begin(7, net.minecraft.client.renderer.vertex.DefaultVertexFormats.PARTICLE_POSITION_TEX_COLOR_LMAP);
+                                b.begin(7, net.minecraft.client.renderer.vertex.DefaultVertexFormats.PARTICLE_POSITION_TEX_COLOR_LMAP);
+                                net.minecraft.client.particle.Better112ParticleDraw.bypass = true;
+                                try {
+                                    particle.renderParticle(a, view, 0.5F, rx, rz, ryz, rxy, rxz);
+                                } finally {
+                                    net.minecraft.client.particle.Better112ParticleDraw.bypass = false;
+                                }
+                                particle.renderParticle(b, view, 0.5F, rx, rz, ryz, rxy, rxz);
+                                int bytes = a.getVertexCount() * a.getVertexFormat().getSize();
+                                boolean same = a.getVertexCount() == b.getVertexCount();
+                                for (int i = 0; same && i < bytes; i++) {
+                                    same = a.getByteBuffer().get(i) == b.getByteBuffer().get(i);
+                                }
+                                a.finishDrawing();
+                                b.finishDrawing();
+                                checked++;
+                                if (bytes > 0) {
+                                    fast++;
+                                }
+                                if (!same) {
+                                    differ++;
+                                    if (first == null) {
+                                        first = particle.getClass().getName();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (Throwable t) {
+                    first = String.valueOf(t);
+                }
+                report.add(String.format("particle draw check: %d particles (%d drew vertices), %d differ%s", checked, fast, differ,
+                        first == null ? "" : " (first: " + first + ")"));
+                break;
+            }
+            case "frustumtest": {
+                // frustumtest:N - N random boxes tested against the view by the game's eight corners and by the one-corner test
+                int n = Integer.parseInt(arg), differ = 0, inside = 0;
+                java.util.Random random = new java.util.Random(4242L);
+                net.minecraft.client.renderer.culling.ClippingHelper helper = net.minecraft.client.renderer.culling.ClippingHelperImpl.getInstance();
+                for (int t = 0; t < n; t++) {
+                    double x = random.nextGaussian() * 40.0D, y = random.nextGaussian() * 20.0D, z = random.nextGaussian() * 40.0D;
+                    double w = random.nextDouble() * (t % 3 == 0 ? 16.0D : 2.0D), h = random.nextDouble() * 4.0D, d = random.nextDouble() * 16.0D;
+                    if (t % 5 == 0) {
+                        x = Math.floor(x);
+                        y = Math.floor(y);
+                        z = Math.floor(z);
+                        w = 16.0D;
+                        h = 16.0D;
+                        d = 16.0D;
+                    }
+                    better112.Hooks.frustumBypass = true;
+                    boolean want;
+                    try {
+                        want = helper.isBoxInFrustum(x, y, z, x + w, y + h, z + d);
+                    } finally {
+                        better112.Hooks.frustumBypass = false;
+                    }
+                    boolean got = helper.isBoxInFrustum(x, y, z, x + w, y + h, z + d);
+                    if (want) {
+                        inside++;
+                    }
+                    if (want != got) {
+                        differ++;
+                    }
+                }
+                report.add(String.format("frustum check: %d boxes, %d in view, %d differ", n, inside, differ));
+                break;
+            }
+            case "cullinfo":
+                report.add("particle culling: " + better112.Hooks.cullInfo());
+                break;
+            case "chunkmap":
+                // chunkmap - how many chunks the client holds, and how many slots its table walks to list them
+                try {
+                    Object map = net.minecraftforge.fml.common.ObfuscationReflectionHelper.getPrivateValue(
+                            net.minecraft.client.multiplayer.ChunkProviderClient.class, mc.world.getChunkProvider(), "field_73236_b");
+                    java.lang.reflect.Field key = it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap.class.getDeclaredField("key");
+                    key.setAccessible(true);
+                    report.add(String.format("client chunks: %d in a table of %d slots", ((java.util.Map<?, ?>) map).size(),
+                            ((long[]) key.get(map)).length));
+                } catch (Throwable t) {
+                    report.add("chunkmap: " + t);
+                }
+                break;
             case "bewitchsync":
                 // bewitchsync - a Bewitchment player sync arriving now, as the server sends them (with or without a player)
                 try {
@@ -1375,6 +1763,10 @@ public final class AutoTest {
         if (fpsLabel != null) {
             long now = System.nanoTime();
             fpsFrames.add(now - fpsLastFrame);
+            if (now - fpsLastFrame > 100000000L && fpsSlow.size() < 10) {
+                long began = System.currentTimeMillis() - (now - fpsLastFrame) / 1000000L;
+                fpsSlow.add(new java.text.SimpleDateFormat("HH:mm:ss.SSS").format(new java.util.Date(began)) + " " + (now - fpsLastFrame) / 1000000L + " ms");
+            }
             fpsLastFrame = now;
             if (now >= fpsEndNanos) {
                 long[] sorted = new long[fpsFrames.size()];
@@ -1385,9 +1777,15 @@ public final class AutoTest {
                 double seconds = (now - fpsStartNanos) / 1.0E9D;
                 long low = sorted[Math.max(0, (int) (sorted.length * 0.99D) - 1)];
                 double moved = fpsStartPos == null || mc.player == null ? 0.0D : mc.player.getPositionVector().distanceTo(fpsStartPos);
-                report.add(String.format("fps %s: avg %.1f, 1%% low %.1f, worst frame %.0f ms, frames %d, moved %.0f blocks, light rebuilds %d, hidden entities %d, hidden block entities %d",
-                        fpsLabel, sorted.length / seconds, 1.0E9D / low, sorted[sorted.length - 1] / 1.0E6D, sorted.length, moved,
+                java.text.SimpleDateFormat clock = new java.text.SimpleDateFormat("HH:mm:ss");
+                long endMillis = System.currentTimeMillis();
+                String span = clock.format(new java.util.Date(endMillis - (long) (seconds * 1000.0D))) + "-" + clock.format(new java.util.Date(endMillis));
+                report.add(String.format("fps %s (%s): avg %.1f, 1%% low %.1f, worst frame %.0f ms, frames %d, moved %.0f blocks, light rebuilds %d, hidden entities %d, hidden block entities %d",
+                        fpsLabel, span, sorted.length / seconds, 1.0E9D / low, sorted[sorted.length - 1] / 1.0E6D, sorted.length, moved,
                         better112.perf.DynamicLights.sectionsMarked - fpsStartMarked, Occlusion.hiddenEntities, Occlusion.hiddenTiles));
+                if (!fpsSlow.isEmpty()) {
+                    report.add("slow frames in " + fpsLabel + ": " + fpsSlow);
+                }
                 fpsLabel = null;
             }
             return;

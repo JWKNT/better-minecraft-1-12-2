@@ -21,6 +21,29 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
  */
 public final class RarityBorders {
 
+    /** Colours already worked out in this game tick, by stack: slots are drawn every frame, names change in ticks. */
+    private static final java.util.IdentityHashMap<ItemStack, Integer> KEPT = new java.util.IdentityHashMap<ItemStack, Integer>();
+    private static long keptAt = Long.MIN_VALUE;
+
+    /** {@link #colorOf}, worked out once per stack and game tick (it reads the item's name, a translation). */
+    static int keptColorOf(ItemStack stack) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc.world == null || stack.isEmpty()) {
+            return colorOf(stack);
+        }
+        long now = mc.world.getTotalWorldTime();
+        if (now != keptAt) {
+            KEPT.clear();
+            keptAt = now;
+        }
+        Integer kept = KEPT.get(stack);
+        if (kept == null) {
+            kept = colorOf(stack);
+            KEPT.put(stack, kept);
+        }
+        return kept;
+    }
+
     /** The colour an item is marked with, or 0 for plain items. */
     static int colorOf(ItemStack stack) {
         if (stack.isEmpty()) {
@@ -57,7 +80,7 @@ public final class RarityBorders {
         begin();
         for (Slot slot : gui.inventorySlots.inventorySlots) {
             if (slot.isEnabled() && slot.getHasStack()) {
-                frame(slot.xPos, slot.yPos, colorOf(slot.getStack()));
+                frame(slot.xPos, slot.yPos, keptColorOf(slot.getStack()));
             }
         }
         end();
@@ -73,7 +96,7 @@ public final class RarityBorders {
         int left = res.getScaledWidth() / 2 - 90, top = res.getScaledHeight() - 19;
         begin();
         for (int i = 0; i < 9; i++) {
-            frame(left + i * 20 + 2, top, colorOf(mc.player.inventory.mainInventory.get(i)));
+            frame(left + i * 20 + 2, top, keptColorOf(mc.player.inventory.mainInventory.get(i)));
         }
         end();
     }
@@ -83,7 +106,7 @@ public final class RarityBorders {
         if (!BetterConfig.rarityBorders) {
             return;
         }
-        int color = colorOf(event.getStack());
+        int color = keptColorOf(event.getStack());
         if (color != 0) {
             event.setBorderStart(0xF0000000 | color);
             event.setBorderEnd(0xF0000000 | darker(color));
