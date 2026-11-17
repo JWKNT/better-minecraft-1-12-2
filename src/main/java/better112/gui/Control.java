@@ -31,7 +31,7 @@ public abstract class Control<T> {
         @Override
         void render(Option<Boolean> option, FontRenderer font, int x, int y, int width, int height, boolean hovered, boolean dragging) {
             int bx = x + width - 16, by = y + height / 2 - 5;
-            boolean ticked = option.get();
+            boolean ticked = option.shown();
             int color = !option.isAvailable() ? DISABLED : ticked ? ACCENT : WHITE;
             if (ticked) {
                 Gui.drawRect(bx + 2, by + 2, bx + 8, by + 8, color);
@@ -64,7 +64,7 @@ public abstract class Control<T> {
 
         @Override
         void render(Option<Integer> option, FontRenderer font, int x, int y, int width, int height, boolean hovered, boolean dragging) {
-            int index = Math.max(0, Math.min(nameKeys.length - 1, option.get()));
+            int index = Math.max(0, Math.min(nameKeys.length - 1, option.shown()));
             String label = I18n.format(nameKeys[index]);
             font.drawStringWithShadow(label, x + width - 6 - font.getStringWidth(label), y + height / 2 - 4,
                     option.isAvailable() ? WHITE : DISABLED);
@@ -72,7 +72,7 @@ public abstract class Control<T> {
 
         @Override
         int reserved(Option<Integer> option, FontRenderer font, boolean active) {
-            int index = Math.max(0, Math.min(nameKeys.length - 1, option.get()));
+            int index = Math.max(0, Math.min(nameKeys.length - 1, option.shown()));
             return font.getStringWidth(I18n.format(nameKeys[index])) + 10;
         }
 
@@ -103,13 +103,13 @@ public abstract class Control<T> {
         @Override
         void render(Option<Integer> option, FontRenderer font, int x, int y, int width, int height, boolean hovered, boolean dragging) {
             int sx = x + width - 96, sy = y + height / 2 - 5, sw = 90, sh = 10;
-            String label = format.apply(option.get());
+            String label = format.apply(option.shown());
             int labelWidth = font.getStringWidth(label);
             if (!option.isAvailable() || !(hovered || dragging)) {
                 font.drawStringWithShadow(label, sx + sw - labelWidth, sy + 1, option.isAvailable() ? WHITE : DISABLED);
                 return;
             }
-            double position = max == min ? 0 : (option.get() - min) / (double) (max - min);
+            double position = max == min ? 0 : (option.shown() - min) / (double) (max - min);
             int thumb = sx + (int) Math.round(position * sw) - 2;
             Gui.drawRect(thumb, sy, thumb + 4, sy + sh, WHITE);
             Gui.drawRect(sx, sy + sh / 2, sx + sw, sy + sh / 2 + 1, WHITE);
@@ -118,7 +118,7 @@ public abstract class Control<T> {
 
         @Override
         int reserved(Option<Integer> option, FontRenderer font, boolean active) {
-            int label = font.getStringWidth(format.apply(option.get()));
+            int label = font.getStringWidth(format.apply(option.shown()));
             return active && option.isAvailable() ? 96 + 6 + label + 4 : label + 10;
         }
 

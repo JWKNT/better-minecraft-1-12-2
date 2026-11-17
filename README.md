@@ -4,7 +4,7 @@ One Forge mod that brings modern Minecraft's quality of life, looks and frame ra
 1.12.2, the version the big expert packs still live on. Built around Divine Journey 2, but it
 depends on no other mod: every integration switches itself off when its partner is missing.
 
-Download `better112-0.1.6.jar` from the
+Download `better112-0.1.7.jar` from the
 [releases](https://github.com/JWKNT/better-minecraft-1-12-2/releases) and put it in the game's
 `mods` folder.
 
@@ -50,7 +50,7 @@ blocks are missing on one side.
 **Video settings, Sodium style.** The vanilla Video Settings screen is replaced by one laid
 out like Sodium's: page tabs, flat option rows, a description and performance impact for the
 hovered option, and Apply / Undo so nothing changes until you say so. Pages: General,
-Quality, Performance, Animations, Particles, Details, Render, Accessibility, Colors, Extras. Shift+P opens the
+Quality, Shaders, Performance, Animations, Particles, Details, Render, Accessibility, Colors, Extras. Shift+P opens the
 vanilla screen; the replacement can be turned off under Extras. GUI Scale goes in half
 steps (1.5x, 2.5x, ...) as far as the window allows, not just the four vanilla sizes.
 
@@ -66,6 +66,45 @@ should. The cost is two full-window copies a frame, measured at about 1.8 ms in 
 1728x1000 window. One side effect: anything a mod sizes in raw screen pixels, such as
 JourneyMap's minimap labels, comes out half as large (its own font setting makes up for
 it).
+
+**Shaders.** A Shaders page in the video settings turns on the mod's own shaders: no shader pack
+and no OptiFine. They are written for the OpenGL 2.1 a 1.12.2 game window gets on every computer,
+macOS included.
+
+- Light: sunlight that is warm when the sun is low and nearly white at noon, shade a little blue
+  from the open sky, warmer torches; leaves, grass, flowers, crops and vines that sway in the
+  wind, more in rain and storms; waves on water that show the sky, clearer where the water is
+  shallow; a soft glow around bright light; a gentle color grade.
+- Intense: all of that stronger, and shadows from the sun (fainter from the moon) out to 112
+  blocks, light shafts when you face the sun, water that reflects the hills and trees around it,
+  darker corners and ground under trees (ambient occlusion), a warm haze towards a low sun, deeper
+  color and darker screen corners.
+- Custom sets each part, with shadows to 64, 112 or 176 blocks.
+
+Mobs, block entities, particles and the hand keep the game's own lighting and cast no sun
+shadows. The Nether and the End get no shadows, light shafts or time-of-day tint. Shadows and
+swaying need Use VBOs (on by default).
+
+How they stay fast, measured in Divine Journey 2 on an Apple M3 Pro at 1728x1000, render distance
+10, in the same session: over a lake and forest, about 139 frames a second with shaders off, 138
+with Light and 125 with Intense; flying over the same land, 122 to 127 off and 110 to 114 with
+Intense.
+
+- The shaders draw the terrain themselves, and give each chunk section's place to the program as
+  a constant vertex attribute instead of moving the game's matrix (or setting a uniform) for every
+  section. On a Mac that made drawing the terrain cheaper for the game thread than the game's own
+  drawing (2.1 instead of 2.45 ms a frame in the view above), which pays for most of the rest.
+- The shadow picture (the world seen from the sun) is not redrawn every frame. It is drawn again
+  only when the sun has moved a fraction of a degree, you have moved a few blocks, or a chunk
+  section in reach was rebuilt (those wait half a second, so a burst of them makes one new
+  picture), and then a slice of sections per frame into a second picture that takes over when it
+  is complete. Sections buried below the lowest ground around them are left out: a third to a
+  half of them in Divine Journey 2.
+- Plants sway from a mark put in their vertices when the chunk is built (from the block and how
+  high the vertex is in it), so swaying costs nothing per frame beyond the vertex shader.
+- Bloom works from a quarter of the screen's size and is worked out every other frame; ambient
+  occlusion works at half size, light shafts at a quarter; the grade changes the picture in place
+  instead of copying it first; water copies the picture only for reflections of the world.
 
 **Frame rate.**
 
@@ -527,7 +566,12 @@ are put behind wrappers in the class loader's list (`forge_terminal`, `forge_sub
 `forge_subscription`, `forge_side`); each wrapper's class name holds the name of the one it
 stands for, so Mixin and TickCentral treat it the same way, and
 `-Dbetter112.checkFastPath=true` runs every class through the original too and logs any
-difference. Most patches are for the game window only; the ones for block
+difference. The shaders take over the terrain layers (`shader_layer`), draw the chunk sections of a layer in
+place of the game's loop (`shader_chunks`), lay the light shafts over the world before the hand
+(`shader_hand`) and bloom and the grade over the finished world (`shader_final`); `shader_sway`
+marks how far each vertex may sway while a chunk is built, `shader_chunk_dirty` tells the shadow
+picture that a section changed, and `sky_tilt` leans the drawn sun's path the way the shadows lean
+it in a dimension that draws the game's own sky. Most patches are for the game window only; the ones for block
 collisions, ray traces, the inventory, biome and chunk lookups, the mods' world generation,
 Thaumcraft's aspects, the stats list, the data fixers, FermiumASM, Forge's transformers and
 TickCentral also apply on a dedicated server, which

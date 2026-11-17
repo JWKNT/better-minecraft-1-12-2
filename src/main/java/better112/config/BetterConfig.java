@@ -43,6 +43,26 @@ public final class BetterConfig {
     public static int entityDistance = 100;
     public static boolean vignette = true;
 
+    // --- Shaders (better112.shader) ---
+    /** 0 off, 1 light, 2 intense, 3 custom (the settings below). */
+    public static int shaders = 0;
+    /** Custom: sun light colour and the light map read for shade. */
+    public static boolean shaderLighting = true;
+    /** Custom: sun shadows, 0 off, 1 near, 2 far, 3 very far. */
+    public static int shaderShadows = 2;
+    /** Custom: leaves and plants sway. */
+    public static boolean shaderWaving = true;
+    /** Custom: water, 0 the game's own, 1 waves and the sky in it, 2 also the world reflected. */
+    public static int shaderWater = 2;
+    /** Custom: light shafts from the sun. */
+    public static boolean shaderRays = true;
+    /** Custom: ambient occlusion from the depth of the world. */
+    public static boolean shaderAo = true;
+    /** Custom: bloom strength, percent. */
+    public static int shaderBloom = 60;
+    /** Custom: colour grade strength, percent. */
+    public static int shaderColor = 70;
+
     // --- Performance ---
     /** Chunk builder threads, 0 keeps the game's own choice. */
     public static int chunkThreads = 0;

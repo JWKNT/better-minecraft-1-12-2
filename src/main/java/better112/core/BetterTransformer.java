@@ -724,6 +724,12 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
                 // The interface is drawn from here on: the in-game overlay, then whatever screen is open.
                 changed |= callAround("gui_scale_begin", find(c, "(FJ)V", "updateCameraAndRender", "func_181560_a"), true, "guiPassBegin",
                         "net/minecraft/client/renderer/EntityRenderer", "setupOverlayRendering", "func_78478_c");
+                // The mod's shaders: light shafts once the world is drawn, before the hand.
+                changed |= callAround("shader_hand", find(c, "(IFJ)V", "renderWorldPass", "func_175068_a"), false, "shaderBeforeHand",
+                        "net/minecraftforge/client/ForgeHooksClient", "dispatchRenderLast");
+                // The mod's shaders: bloom and the colour grade over the finished world, before the interface.
+                changed |= callAround("shader_final", find(c, "(FJ)V", "updateCameraAndRender", "func_181560_a"), false, "shaderAfterWorld",
+                        "net/minecraft/client/renderer/EntityRenderer", "renderWorld", "func_78471_a");
                 return changed;
             }
         });
@@ -743,6 +749,13 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
                         find(c, "(Lnet/minecraft/entity/Entity;Lnet/minecraft/client/renderer/culling/ICamera;F)V",
                                 "renderEntities", "func_180446_a"),
                         "captureCamera", "(Lnet/minecraft/client/renderer/culling/ICamera;)V", 2);
+                // The mod's shaders take over the drawing of each terrain layer.
+                MethodNode layer = find(c, "(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I", "renderBlockLayer", "func_174977_a");
+                if (callAtHead("shader_layer", layer, "shaderLayer", "(Lnet/minecraft/util/BlockRenderLayer;DLnet/minecraft/entity/Entity;)V", 1, 2, 5)) {
+                    changed = true;
+                    callBeforeReturns(layer, "shaderLayerEnd", "(Lnet/minecraft/util/BlockRenderLayer;)V", 1);
+                }
+                changed |= patchSkyTilt(find(c, "(FI)V", "renderSky", "func_174976_a"));
                 return changed;
             }
         });
@@ -826,10 +839,22 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
             }
         });
 
+        PATCHES.put("net.minecraft.client.renderer.VboRenderList", new ClassPatch() {
+            @Override
+            public boolean apply(ClassNode c) {
+                // While a shader program draws the terrain, it places each chunk section itself (no matrix change per section).
+                return cancelIf("shader_chunks", find(c, "(Lnet/minecraft/util/BlockRenderLayer;)V", "renderChunkLayer", "func_178001_a"),
+                        "shaderDrawChunks", "(Lnet/minecraft/client/renderer/ChunkRenderContainer;Lnet/minecraft/util/BlockRenderLayer;)Z", 0, 1);
+            }
+        });
+
         PATCHES.put("net.minecraft.client.renderer.chunk.RenderChunk", new ClassPatch() {
             @Override
             public boolean apply(ClassNode c) {
                 boolean changed = patchRenderChunk(c);
+                // A section with a new mesh may change what the shadow picture shows.
+                changed |= callAtHead("shader_chunk_dirty", find(c, "(Lnet/minecraft/client/renderer/chunk/CompiledChunk;)V", "setCompiledChunk",
+                        "func_178580_a"), "chunkCompiled", "(Lnet/minecraft/client/renderer/chunk/RenderChunk;)V", 0);
                 // The section builder asks for BlockRenderLayer.values() for every block, and each call copies the array.
                 changed |= cachedValues("chunk_layers", find(c, "(FFFLnet/minecraft/client/renderer/chunk/ChunkCompileTaskGenerator;)V",
                         "rebuildChunk", "func_178581_b"), "net/minecraft/util/BlockRenderLayer", "RENDER_LAYERS");
@@ -1191,8 +1216,16 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
         PATCHES.put("net.minecraft.client.renderer.BlockRendererDispatcher", new ClassPatch() {
             @Override
             public boolean apply(ClassNode c) {
-                return patchBlockModel(find(c, "(Lnet/minecraft/block/state/IBlockState;Lnet/minecraft/util/math/BlockPos;"
-                        + "Lnet/minecraft/world/IBlockAccess;Lnet/minecraft/client/renderer/BufferBuilder;)Z", "renderBlock", "func_175018_a"));
+                MethodNode render = find(c, "(Lnet/minecraft/block/state/IBlockState;Lnet/minecraft/util/math/BlockPos;"
+                        + "Lnet/minecraft/world/IBlockAccess;Lnet/minecraft/client/renderer/BufferBuilder;)Z", "renderBlock", "func_175018_a");
+                boolean changed = patchBlockModel(render);
+                // The shaders' swaying plants: each block's vertices are marked with how far they may move.
+                if (callAtHead("shader_sway", render, "swayBegin", "(Lnet/minecraft/client/renderer/BufferBuilder;)V", 4)) {
+                    callBeforeReturns(render, "swayEnd", "(Lnet/minecraft/block/state/IBlockState;Lnet/minecraft/util/math/BlockPos;"
+                            + "Lnet/minecraft/client/renderer/BufferBuilder;)V", 1, 2, 4);
+                    changed = true;
+                }
+                return changed;
             }
         });
 
@@ -1606,6 +1639,45 @@ public final class BetterTransformer implements IClassTransformer, Opcodes {
         }
         PatchState.applied(id);
         return true;
+    }
+
+    /** Before every return of a method: {@code Hooks.hook(args);} (no patch id of its own: it goes with a head patch). */
+    private static void callBeforeReturns(MethodNode m, String hook, String hookDesc, int... vars) {
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+            int op = n.getOpcode();
+            if (op >= IRETURN && op <= RETURN) {
+                InsnList code = loadArgs(hookDesc, vars);
+                code.add(new MethodInsnNode(INVOKESTATIC, HOOKS, hook, hookDesc, false));
+                m.instructions.insertBefore(n, code);
+            }
+        }
+    }
+
+    /**
+     * RenderGlobal.renderSky turns the sky by -90 degrees about Y, then by the time of day about X, before drawing the sun and
+     * moon. A call in front of the first lets the shaders lean the sun's path (as their shadows do) by turning about X first.
+     */
+    private static boolean patchSkyTilt(MethodNode m) {
+        String id = "sky_tilt";
+        if (m == null || !PatchState.enabled(id)) {
+            PatchState.failed(id);
+            return false;
+        }
+        for (AbstractInsnNode n = m.instructions.getFirst(); n != null; n = n.getNext()) {
+            if (!(n instanceof LdcInsnNode) || !Float.valueOf(-90.0F).equals(((LdcInsnNode) n).cst)) {
+                continue;
+            }
+            AbstractInsnNode a = n.getNext(), b = a == null ? null : a.getNext(), d = b == null ? null : b.getNext(), call = d == null ? null : d.getNext();
+            if (a != null && a.getOpcode() == FCONST_0 && b.getOpcode() == FCONST_1 && d.getOpcode() == FCONST_0 && call instanceof MethodInsnNode
+                    && ((MethodInsnNode) call).owner.equals("net/minecraft/client/renderer/GlStateManager")
+                    && ((MethodInsnNode) call).desc.equals("(FFFF)V")) {
+                m.instructions.insertBefore(n, new MethodInsnNode(INVOKESTATIC, HOOKS, "skyTilt", "()V", false));
+                PatchState.applied(id);
+                return true;
+            }
+        }
+        PatchState.failed(id);
+        return false;
     }
 
     /** Makes the fixed 3x3 biome colour blend a setting (1x1 up to 15x15). */

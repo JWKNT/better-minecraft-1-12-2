@@ -160,6 +160,43 @@ public final class OptionPages {
                                 () -> gs.mipmapLevels, v -> gs.setOptionFloatValue(GameSettings.Options.MIPMAP_LEVELS, v))
                                 .impact(Impact.MEDIUM).flags(Option.VANILLA | Option.MIPMAPS)));
 
+        // ---------------------------------------------------------------- Shaders
+        final Option<Integer> shaderPreset = cycle("shaders", () -> BetterConfig.shaders, v -> BetterConfig.shaders = v,
+                "options.off", "better112.value.light", "better112.value.intense", "better112.value.custom")
+                .impact(Impact.HIGH).flags(Option.BETTER | Option.RELOAD_CHUNKS)
+                .availableWhen(() -> better112.shader.Shaders.possible() && !anyFailed("shader_layer", "shader_final"),
+                        () -> anyFailed("shader_layer", "shader_final") ? I18n.format("better112.unavailable.patch")
+                                : I18n.format("better112.unavailable.shaders", better112.shader.Shaders.problem))
+                .note(better112.shader.Shaders::note);
+        java.util.function.BooleanSupplier custom = () -> shaderPreset.get() == better112.shader.Shaders.CUSTOM;
+        // Greyed out under Light or Intense, the rows show what that preset uses.
+        java.util.function.IntFunction<Supplier<Boolean>> presetTick = i -> () -> better112.shader.Shaders.presetValue(shaderPreset.get(), i) != 0;
+        java.util.function.IntFunction<Supplier<Integer>> presetInt = i -> () -> better112.shader.Shaders.presetValue(shaderPreset.get(), i);
+        Supplier<String> pickCustom = () -> I18n.format("better112.unavailable.shaders_custom");
+        pages.add(new OptionPage("shaders")
+                .group(shaderPreset)
+                .group(
+                        tick("shader_lighting", () -> BetterConfig.shaderLighting, v -> BetterConfig.shaderLighting = v)
+                                .impact(Impact.LOW).flags(Option.BETTER).availableWhen(custom, pickCustom).showWhenUnavailable(presetTick.apply(0)),
+                        cycle("shader_shadows", () -> BetterConfig.shaderShadows, v -> BetterConfig.shaderShadows = v,
+                                "options.off", "better112.value.near", "better112.value.far", "better112.value.very_far")
+                                .impact(Impact.HIGH).flags(Option.BETTER).availableWhen(custom, pickCustom).showWhenUnavailable(presetInt.apply(1)),
+                        tick("shader_waving", () -> BetterConfig.shaderWaving, v -> BetterConfig.shaderWaving = v)
+                                .impact(Impact.LOW).flags(Option.BETTER | Option.RELOAD_CHUNKS).availableWhen(custom, pickCustom).showWhenUnavailable(presetTick.apply(2)),
+                        cycle("shader_water", () -> BetterConfig.shaderWater, v -> BetterConfig.shaderWater = v,
+                                "better112.value.default", "better112.value.waves", "better112.value.reflections")
+                                .impact(Impact.MEDIUM).flags(Option.BETTER).availableWhen(custom, pickCustom).showWhenUnavailable(presetInt.apply(3)),
+                        tick("shader_rays", () -> BetterConfig.shaderRays, v -> BetterConfig.shaderRays = v)
+                                .impact(Impact.LOW).flags(Option.BETTER).availableWhen(custom, pickCustom).showWhenUnavailable(presetTick.apply(4)),
+                        tick("shader_ao", () -> BetterConfig.shaderAo, v -> BetterConfig.shaderAo = v)
+                                .impact(Impact.MEDIUM).flags(Option.BETTER).availableWhen(custom, pickCustom).showWhenUnavailable(presetTick.apply(5)),
+                        slider("shader_bloom", 0, 100, 5, v -> v == 0 ? I18n.format("options.off") : v + "%",
+                                () -> BetterConfig.shaderBloom, v -> BetterConfig.shaderBloom = v)
+                                .impact(Impact.LOW).flags(Option.BETTER).availableWhen(custom, pickCustom).showWhenUnavailable(presetInt.apply(6)),
+                        slider("shader_color", 0, 100, 5, v -> v == 0 ? I18n.format("options.off") : v + "%",
+                                () -> BetterConfig.shaderColor, v -> BetterConfig.shaderColor = v)
+                                .impact(Impact.LOW).flags(Option.BETTER).availableWhen(custom, pickCustom).showWhenUnavailable(presetInt.apply(7))));
+
         // ---------------------------------------------------------------- Performance
         int cores = Math.max(1, Runtime.getRuntime().availableProcessors());
         pages.add(new OptionPage("performance")

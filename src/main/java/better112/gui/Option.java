@@ -41,6 +41,7 @@ public final class Option<T> {
     private BooleanSupplier available;
     private Supplier<String> unavailableReason;
     private Supplier<String> note;
+    private Supplier<T> unavailableValue;
 
     private T value;
     private T stored;
@@ -68,6 +69,17 @@ public final class Option<T> {
         this.available = test;
         this.unavailableReason = reason;
         return this;
+    }
+
+    /** While greyed out, the row shows this value (what is in effect) instead of its own. */
+    public Option<T> showWhenUnavailable(Supplier<T> value) {
+        this.unavailableValue = value;
+        return this;
+    }
+
+    /** The value the row displays. */
+    public T shown() {
+        return unavailableValue != null && !isAvailable() ? unavailableValue.get() : value;
     }
 
     /** An extra line under the description, such as what a feature is currently using. */

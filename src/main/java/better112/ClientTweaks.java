@@ -241,6 +241,7 @@ public final class ClientTweaks {
     public void onTextureStitch(TextureStitchEvent.Post event) {
         Hooks.clearSpriteCache();
         better112.cosmetic.BetterGrass.clear();
+        better112.shader.Shaders.atlasStitched(event.getMap());
     }
 
     // ------------------------------------------------------------------------------------

@@ -141,6 +141,85 @@ public final class Hooks {
                 && PatchState.isApplied("sprite_animation") && PatchState.isApplied("sprite_getters")
                 && PatchState.isApplied("sprite_quads") && PatchState.isApplied("sprite_chunks")
                 && PatchState.isApplied("sprite_visible");
+        better112.shader.Shaders.refresh();
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Shaders (better112.shader)
+    // ------------------------------------------------------------------------------------
+
+    /** The mod's shaders are on and possible here; set by Shaders.refresh. */
+    public static boolean shadersOn;
+
+    /** Head of RenderGlobal.renderBlockLayer(layer, partialTicks, pass, entity). */
+    public static void shaderLayer(net.minecraft.util.BlockRenderLayer layer, double partialTicks, Entity entity) {
+        if (shadersOn) {
+            better112.shader.Shaders.beginLayer(layer, partialTicks, entity);
+        } else if (better112.shader.GpuTimer.enabled) {
+            better112.shader.GpuTimer.vanillaBegin(layer);
+        }
+    }
+
+    /** End of RenderGlobal.renderBlockLayer(layer, partialTicks, pass, entity). */
+    public static void shaderLayerEnd(net.minecraft.util.BlockRenderLayer layer) {
+        if (shadersOn) {
+            better112.shader.Shaders.endLayer(layer);
+        } else if (better112.shader.GpuTimer.enabled) {
+            better112.shader.GpuTimer.vanillaEnd();
+        }
+    }
+
+    /** In place of VboRenderList.renderChunkLayer: true when the shaders drew the layer's sections themselves. */
+    public static boolean shaderDrawChunks(net.minecraft.client.renderer.ChunkRenderContainer container, net.minecraft.util.BlockRenderLayer layer) {
+        return shadersOn && better112.shader.Shaders.drawChunks(container, layer);
+    }
+
+    /** After EntityRenderer.renderWorld: the world (hand included) is finished, the interface not yet drawn. */
+    public static void shaderAfterWorld() {
+        if (shadersOn) {
+            better112.shader.Shaders.afterWorld();
+        } else if (better112.shader.GpuTimer.enabled) {
+            better112.shader.GpuTimer.vanillaFrame();
+        }
+    }
+
+    /** After RenderWorldLastEvent, before the hand: the world is complete, so light shafts can be laid over it. */
+    public static void shaderBeforeHand() {
+        if (shadersOn) {
+            better112.shader.Shaders.beforeHand();
+        }
+    }
+
+    /** In RenderGlobal.renderSky, before the sun and moon are turned to the time of day: leans their path as the shadows do. */
+    public static void skyTilt() {
+        if (shadersOn) {
+            float tilt = better112.shader.Shaders.skyTilt();
+            if (tilt != 0.0F) {
+                net.minecraft.client.renderer.GlStateManager.rotate(tilt, 1.0F, 0.0F, 0.0F);
+            }
+        }
+    }
+
+    /** Head of BlockRendererDispatcher.renderBlock (on the chunk builder threads). */
+    public static void swayBegin(net.minecraft.client.renderer.BufferBuilder buffer) {
+        if (better112.shader.Sway.active) {
+            better112.shader.Sway.begin(buffer);
+        }
+    }
+
+    /** End of BlockRendererDispatcher.renderBlock: marks how far the block's vertices may sway. */
+    public static void swayEnd(net.minecraft.block.state.IBlockState state, net.minecraft.util.math.BlockPos pos,
+            net.minecraft.client.renderer.BufferBuilder buffer) {
+        if (better112.shader.Sway.active) {
+            better112.shader.Sway.end(state, pos, buffer);
+        }
+    }
+
+    /** Head of RenderChunk.setCompiledChunk: a section has a new mesh. */
+    public static void chunkCompiled(RenderChunk chunk) {
+        if (shadersOn) {
+            better112.shader.Shaders.chunkCompiled(chunk);
+        }
     }
 
     /** Sprites are recreated on every resource reload. */

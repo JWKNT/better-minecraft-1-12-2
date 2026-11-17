@@ -60,6 +60,7 @@ import org.lwjgl.opengl.Display;
  *   water:TICKS|state   fireflies:N             debugtargets
  *   zoom:ITEM|off       idle:MINUTES|state      ripples:N           mounthud   ride   ownfx
  *   join:HOST:PORT      online
+ *   inbox:FILE          report              shaderinfo         shaderreload     gputime:on|off|reset|report:LABEL
  *
  * Results go to better112-autotest/report.txt and screenshots/ in the game folder.
  */
@@ -247,8 +248,14 @@ public final class AutoTest {
             return;
         }
         if (steps.isEmpty()) {
-            finish();
-            return;
+            if (inbox == null) {
+                finish();
+                return;
+            }
+            pollInbox();
+            if (steps.isEmpty()) {
+                return;
+            }
         }
         String step = steps.poll().trim();
         if (step.isEmpty()) {
@@ -1551,6 +1558,11 @@ public final class AutoTest {
                 // fly:on | fly:off - a creative player stays in the air after a teleport
                 if (mc.player != null) {
                     mc.player.capabilities.isFlying = arg.equals("on");
+                    if (arg.equals("on") && mc.player.onGround) {
+                        // Standing on the ground ends flight on the next tick: lift off first.
+                        mc.player.onGround = false;
+                        mc.player.motionY = 0.2D;
+                    }
                     mc.player.sendPlayerAbilities();
                 }
                 waitTicks = 3;
@@ -1698,6 +1710,76 @@ public final class AutoTest {
                 }
                 waitTicks = 20;
                 break;
+            case "surface": {
+                // surface:X:Z:H puts the player H blocks above the highest block at X, Z (water and treetops count),
+                // the way gobiome does: on the server's thread, after generating the place and its neighbours.
+                String[] q = step.split(":");
+                final int sx = Integer.parseInt(q[1]), sz = Integer.parseInt(q[2]);
+                final int above = q.length > 3 ? Integer.parseInt(q[3]) : 2;
+                final net.minecraft.server.integrated.IntegratedServer server = mc.getIntegratedServer();
+                if (server != null && mc.player != null) {
+                    server.addScheduledTask(new Runnable() {
+                        @Override
+                        public void run() {
+                            net.minecraft.world.World world = server.getWorld(0);
+                            for (int cx = -1; cx <= 1; cx++) {
+                                for (int cz = -1; cz <= 1; cz++) {
+                                    world.getChunk((sx >> 4) + cx, (sz >> 4) + cz);
+                                }
+                            }
+                            net.minecraft.util.math.BlockPos at = new net.minecraft.util.math.BlockPos(sx, 0, sz);
+                            int ground = Math.max(world.getTopSolidOrLiquidBlock(at).getY(), world.getHeight(at).getY());
+                            net.minecraft.entity.player.EntityPlayerMP sp = server.getPlayerList().getPlayerByUUID(mc.player.getUniqueID());
+                            // Flying, so the player stays up there (a creative player who lands stops flying).
+                            sp.capabilities.isFlying = sp.capabilities.allowFlying;
+                            sp.sendPlayerAbilities();
+                            sp.connection.setPlayerLocation(sx + 0.5D, ground + above, sz + 0.5D, sp.rotationYaw, sp.rotationPitch);
+                            report.add("surface at " + sx + ", " + sz + ": ground " + ground + ", feet " + (ground + above));
+                        }
+                    });
+                }
+                waitTicks = 40;
+                break;
+            }
+            case "inbox":
+                // Keeps the game running and takes further steps from lines appended to a file, until "quit".
+                inbox = new File(arg + (p.length > 2 ? ":" + p[2] : ""));
+                inboxRead = 0; // everything in it is for this run (the script empties it first)
+                report.add("inbox " + inbox + " from byte " + inboxRead);
+                break;
+            case "report":
+                writeReport();
+                break;
+            case "shaderinfo":
+                report.add("shaders: " + better112.shader.Shaders.info());
+                break;
+            case "shadervao":
+                better112.shader.Shaders.setVaos(arg.equals("on"));
+                report.add("shader vertex array objects " + arg);
+                break;
+            case "shaderbarrier":
+                better112.shader.Shaders.setBarrier(arg.equals("on"));
+                report.add("shader texture barrier " + arg);
+                break;
+            case "shaderexp":
+                report.add(better112.shader.Shaders.experiment(arg, p.length > 2 && p[2].equals("on")));
+                break;
+            case "shaderreload":
+                better112.shader.Shaders.reloadPrograms();
+                report.add("shader programs reloaded");
+                break;
+            case "gputime":
+                if (arg.equals("on")) {
+                    better112.shader.GpuTimer.enabled = true;
+                    better112.shader.GpuTimer.reset();
+                } else if (arg.equals("off")) {
+                    better112.shader.GpuTimer.enabled = false;
+                } else if (arg.equals("reset")) {
+                    better112.shader.GpuTimer.reset();
+                } else {
+                    report.add("gpu time " + (p.length > 2 ? p[2] : "") + ": " + better112.shader.GpuTimer.report());
+                }
+                break;
             case "quit":
                 finish();
                 break;
@@ -1789,6 +1871,53 @@ public final class AutoTest {
                 fpsLabel = null;
             }
             return;
+        }
+    }
+
+    private File inbox;
+    private long inboxRead;
+    private int reportWritten;
+
+    private void pollInbox() {
+        if (report.size() != reportWritten) {
+            writeReport();
+        }
+        long length = inbox.length();
+        if (length <= inboxRead) {
+            return;
+        }
+        try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(inbox, "r")) {
+            in.seek(inboxRead);
+            byte[] bytes = new byte[(int) (length - inboxRead)];
+            in.readFully(bytes);
+            String text = new String(bytes, StandardCharsets.UTF_8);
+            int end = text.lastIndexOf('\n');
+            if (end < 0) {
+                return; // the line is still being written
+            }
+            inboxRead += text.substring(0, end + 1).getBytes(StandardCharsets.UTF_8).length;
+            for (String line : text.substring(0, end).split("\n")) {
+                for (String part : line.split(";")) {
+                    if (!part.trim().isEmpty()) {
+                        steps.add(part.trim());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            report.add("inbox read failed: " + e);
+        }
+    }
+
+    private void writeReport() {
+        try {
+            File dir = new File(mc.gameDir, "better112-autotest");
+            dir.mkdirs();
+            synchronized (report) {
+                Files.write(new File(dir, "report.txt").toPath(), new ArrayList<String>(report), StandardCharsets.UTF_8);
+                reportWritten = report.size();
+            }
+        } catch (Exception e) {
+            Better112.LOG.error("Could not write autotest report", e);
         }
     }
 
